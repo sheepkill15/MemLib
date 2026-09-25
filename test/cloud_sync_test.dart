@@ -143,4 +143,30 @@ void main() {
     expect(first.folders.single.name, 'On first');
     expect(remote.folders.values.single.folder.name, 'On second');
   });
+
+  test('resolving a folder conflict with the cloud pulls the remote edit', () async {
+    await first.addFolder('Original');
+    await CloudSyncEngine(first, remote, ownerId).sync();
+    await CloudSyncEngine(second, remote, ownerId).sync();
+    await first.renameFolder(first.folders.single, 'Local edit');
+    await second.renameFolder(second.folders.single, 'Cloud edit');
+    await CloudSyncEngine(second, remote, ownerId).sync();
+    final id = first.folders.single.id;
+    await first.resolveConflict('folder', id, keepDevice: false, remoteVersion: remote.folders[id]!.version);
+    await CloudSyncEngine(first, remote, ownerId).sync();
+    expect(first.folders.single.name, 'Cloud edit');
+  });
+
+  test('resolving a folder conflict with the device publishes the local edit', () async {
+    await first.addFolder('Original');
+    await CloudSyncEngine(first, remote, ownerId).sync();
+    await CloudSyncEngine(second, remote, ownerId).sync();
+    await first.renameFolder(first.folders.single, 'Local edit');
+    await second.renameFolder(second.folders.single, 'Cloud edit');
+    await CloudSyncEngine(second, remote, ownerId).sync();
+    final id = first.folders.single.id;
+    await first.resolveConflict('folder', id, keepDevice: true, remoteVersion: remote.folders[id]!.version);
+    await CloudSyncEngine(first, remote, ownerId).sync();
+    expect(remote.folders[id]!.folder.name, 'Local edit');
+  });
 }

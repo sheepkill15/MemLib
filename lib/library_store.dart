@@ -279,6 +279,21 @@ class LibraryStore extends ChangeNotifier {
     await _save();
   }
 
+  Future<void> resolveConflict(String entity, String id, {required bool keepDevice, String? remoteVersion}) async {
+    final versions = entity == 'folder' ? folderVersions : itemVersions;
+    final dirty = entity == 'folder' ? dirtyFolders : dirtyItems;
+    final deleted = entity == 'folder' ? deletedFolders : deletedItems;
+    if (keepDevice) {
+      if (remoteVersion == null) { versions.remove(id); } else { versions[id] = remoteVersion; }
+      if (remoteVersion == null && deleted.contains(id)) deleted.remove(id);
+    } else {
+      dirty.remove(id);
+      deleted.remove(id);
+      versions.remove(id);
+    }
+    await _save();
+  }
+
   Future<void> mergeRemote({required Map<String, LibraryFolder> remoteFolders, required Map<String, LibraryItem> remoteItems, required Map<String, String> remoteFolderVersions, required Map<String, String> remoteItemVersions}) async {
     final removedFolderIds = folders.where((folder) => !dirtyFolders.contains(folder.id) && !deletedFolders.contains(folder.id) && !remoteFolders.containsKey(folder.id)).map((folder) => folder.id).toList();
     folders.removeWhere((folder) => removedFolderIds.contains(folder.id));

@@ -11,6 +11,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'giphy_service.dart';
+import 'account_dialog.dart';
+import 'cloud_controller.dart';
 import 'library_store.dart';
 import 'media_actions.dart';
 import 'picker_navigation.dart';
@@ -35,15 +37,18 @@ Future<void> main(List<String> args) async {
   }
   final store = LibraryStore();
   await store.load();
+  final cloud = CloudController(store, supabaseUrl.isNotEmpty && supabasePublishableKey.isNotEmpty ? Supabase.instance.client : null);
+  await cloud.start();
   final shortcut = Platform.isWindows ? await ShortcutSettings.load() : null;
-  runApp(MemlibApp(store: store, initialShortcut: shortcut));
+  runApp(MemlibApp(store: store, cloud: cloud, initialShortcut: shortcut));
 }
 
 class MemlibApp extends StatelessWidget {
-  const MemlibApp({super.key, required this.store, this.enableTray = true, this.initialShortcut});
+  const MemlibApp({super.key, required this.store, this.enableTray = true, this.initialShortcut, this.cloud});
   final LibraryStore store;
   final bool enableTray;
   final HotKey? initialShortcut;
+  final CloudController? cloud;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -57,15 +62,16 @@ class MemlibApp extends StatelessWidget {
       cardTheme: CardThemeData(color: const Color(0xFF24202E), elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
       inputDecorationTheme: InputDecorationTheme(filled: true, fillColor: const Color(0xFF211C2B), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14))),
     ),
-    home: LibraryScreen(store: store, enableTray: enableTray, initialShortcut: initialShortcut),
+    home: LibraryScreen(store: store, cloud: cloud, enableTray: enableTray, initialShortcut: initialShortcut),
   );
 }
 
 class LibraryScreen extends StatefulWidget {
-  const LibraryScreen({super.key, required this.store, this.enableTray = true, this.initialShortcut});
+  const LibraryScreen({super.key, required this.store, this.enableTray = true, this.initialShortcut, this.cloud});
   final LibraryStore store;
   final bool enableTray;
   final HotKey? initialShortcut;
+  final CloudController? cloud;
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -97,13 +103,16 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
   String? error;
   List<GiphyResult> results = [];
   final seenGiphy = <String>{};
+  String? shownAccountId;
   late HotKey hotkey;
   WindowsTray? windowsTray;
 
   @override
   void initState() {
     super.initState();
+    shownAccountId = widget.store.accountId;
     widget.store.addListener(_refresh);
+    widget.cloud?.addListener(_refresh);
     if (Platform.isWindows) {
       if (widget.enableTray) unawaited(_loadStartupSetting());
       windowManager.addListener(this);
@@ -144,6 +153,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
       windowManager.removeListener(this);
     }
     widget.store.removeListener(_refresh);
+    widget.cloud?.removeListener(_refresh);
     searchController.dispose();
     giphyController.dispose();
     searchFocus.dispose();
@@ -152,7 +162,17 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
     super.dispose();
   }
 
-  void _refresh() => setState(() {});
+  void _refresh() {
+    if (!mounted) return;
+    setState(() {
+      if (shownAccountId != widget.store.accountId) {
+        shownAccountId = widget.store.accountId;
+        selectedFolder = null;
+        favoritesOnly = false;
+        selectedIndex = 0;
+      }
+    });
+  }
 
   Future<void> _loadStartupSetting() async {
     try {
@@ -457,12 +477,63 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
     return items;
   }
 
+  Future<void> _accountAction(String action) async {
+    final cloud = widget.cloud;
+    if (cloud == null) return;
+    try {
+      if (action == 'sync') await cloud.syncNow();
+      if (action == 'signout') await cloud.signOut();
+      if (action == 'import') {
+        if (!mounted) return;
+        final confirmed = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
+          title: const Text('Import local library?'),
+          content: const Text('Copy your guest folders and media into this account. Your existing cloud library stays in place.'),
+          actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')), FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Import'))],
+        ));
+        if (confirmed == true) {
+          final count = await cloud.importGuestLibrary();
+          if (mounted) _showError('Imported $count items. Syncing now.');
+        }
+      }
+      if (cloud.syncError != null && mounted) { _showError(cloud.syncError!); }
+    } catch (e) { if (mounted) _showError('Account action failed: $e'); }
+  }
+
+  Widget _accountButton() {
+    final cloud = widget.cloud;
+    if (cloud == null || !cloud.configured) return const SizedBox.shrink();
+    if (!cloud.signedIn) {
+      return TextButton.icon(onPressed: () => showDialog<bool>(context: context, builder: (_) => AccountDialog(cloud: cloud)), icon: const Icon(Icons.person_outline), label: const Text('Sign in'));
+    }
+    return PopupMenuButton<String>(
+      tooltip: cloud.syncError ?? (cloud.syncing ? 'Syncing' : 'Account and sync'),
+      icon: Icon(cloud.syncError != null ? Icons.cloud_off_outlined : cloud.syncing ? Icons.sync : Icons.cloud_done_outlined),
+      onSelected: (value) => unawaited(_accountAction(value)),
+      itemBuilder: (_) => [
+        PopupMenuItem<String>(enabled: false, child: Text(cloud.email ?? 'Signed in', overflow: TextOverflow.ellipsis)),
+        PopupMenuItem<String>(enabled: false, child: Text(cloud.syncError != null ? 'Sync needs attention' : cloud.syncing ? 'Syncing…' : cloud.lastSyncedAt == null ? 'Waiting to sync' : 'Up to date')),
+        const PopupMenuItem(value: 'sync', child: Text('Sync now')),
+        if (cloud.guestLibraryAvailable) const PopupMenuItem(value: 'import', child: Text('Import local library')),
+        const PopupMenuItem(value: 'signout', child: Text('Sign out')),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width > 720 && !picker;
     final content = picker ? _pickerView() : Row(children: [
       if (wide) SizedBox(width: 220, child: _sidebar()),
       Expanded(child: Column(children: [
+        if (!picker && widget.cloud?.syncError != null) MaterialBanner(
+          content: Text(widget.cloud!.syncError!, maxLines: 2, overflow: TextOverflow.ellipsis),
+          actions: [
+            if (widget.cloud!.conflict != null) ...[
+              TextButton(onPressed: () => unawaited(widget.cloud!.resolveConflict(keepDevice: false)), child: const Text('Use cloud')),
+              TextButton(onPressed: () => unawaited(widget.cloud!.resolveConflict(keepDevice: true)), child: const Text('Keep device')),
+            ] else TextButton(onPressed: () => unawaited(widget.cloud!.syncNow()), child: const Text('Retry')),
+          ],
+        ),
         if (!picker) Padding(padding: const EdgeInsets.fromLTRB(16, 8, 16, 4), child: SegmentedButton<bool>(segments: const [ButtonSegment(value: false, label: Text('Library'), icon: Icon(Icons.collections_outlined)), ButtonSegment(value: true, label: Text('GIPHY'), icon: Icon(Icons.search))], selected: {giphyTab}, onSelectionChanged: (v) => _switchTab(v.first))),
         if (giphyTab && !picker) Expanded(child: _giphyView()) else Expanded(child: _libraryView(wide)),
       ])),
@@ -471,6 +542,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
       appBar: picker ? null : AppBar(
         title: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.auto_awesome_mosaic_rounded, color: Color(0xFFBDA7FF)), SizedBox(width: 10), Text('Memlib', style: TextStyle(fontWeight: FontWeight.w700))]),
         actions: [
+          _accountButton(),
           if (Platform.isWindows) IconButton(tooltip: picker ? 'Open library' : 'Quick picker · ${hotkey.debugName}', icon: Icon(picker ? Icons.open_in_full : Icons.bolt), onPressed: () => _togglePicker()),
           if (Platform.isWindows && !picker) PopupMenuButton<String>(tooltip: 'Settings', icon: const Icon(Icons.settings_outlined), onSelected: (value) {
             if (value == 'shortcut') unawaited(_changeShortcut());

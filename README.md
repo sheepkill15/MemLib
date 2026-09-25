@@ -12,7 +12,7 @@ When the Windows window is hidden, use the Memlib tray icon to reopen the librar
 
 The local library lives under the app support directory. Imported files are copied into app storage, so moving the original files does not break the library. On Windows, drag PNG, GIF, JPEG, or WebP files from Explorer into the library window to import them into the selected folder.
 
-## Optional service configuration
+## Supabase sign-in and sync
 
 Create a Supabase project, then apply [`supabase/migrations/0001_library.sql`](supabase/migrations/0001_library.sql) in its SQL editor. The app accepts the URL and **publishable** key through Dart defines:
 
@@ -20,7 +20,9 @@ Create a Supabase project, then apply [`supabase/migrations/0001_library.sql`](s
 flutter run -d windows --dart-define=SUPABASE_URL=https://YOUR_PROJECT.supabase.co --dart-define=SUPABASE_PUBLISHABLE_KEY=YOUR_PUBLISHABLE_KEY
 ```
 
-The schema is ready for private syncing, but the client currently uses local storage only. Do not place a Supabase service role key in the app. Authentication and sync still need to be connected after the project is created.
+Open **Sign in** in the library toolbar to create an account or sign in with email and password. If email confirmation is enabled in Supabase, confirm the message first, then sign in. The app opens the account's local cache immediately and syncs folders, favourites, item details and media in the background. The account menu shows sync status and offers **Sync now** and **Sign out**. Files are stored in the private `library-media` bucket under the user's ID; the migration sets row and storage access policies. Keep the service role key out of the app.
+
+Your pre-sign-in library remains on this device as a guest library. After signing in, choose **Import local library** in the account menu to copy it into the account and upload it. This action can be repeated, so each import creates another copy. Signed-in libraries also remain cached on the device after sign-out for offline access when that account signs in again. If two devices edit the same item or folder while disconnected, the library shows **Use cloud** and **Keep device** choices; it does not silently overwrite either edit. Sync errors can be retried from the banner or account menu.
 
 If you already have a `.env` file containing `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, use `./tool/run.ps1 -Device android` (or `windows`). The script passes only those public values and optional GIPHY keys to Flutter. `.env` is ignored by Git.
 
@@ -35,10 +37,9 @@ GIPHY results are displayed in their own view with attribution, including inside
 
 ## Next milestones
 
-1. Supabase sign-in, sync, and conflict handling with the local cache retained for fast picker opening.
-2. Android keyboard with rich GIF/sticker insertion, plus a share target for apps that do not accept rich keyboard content.
-3. Pinterest OAuth import after Pinterest approves API access. Map board/Pins to folders and preserve source attribution.
-4. Test focus restoration and paste behavior across target apps, then package the Windows app for installation.
+1. Android keyboard with rich GIF/sticker insertion, plus a share target for apps that do not accept rich keyboard content.
+2. Pinterest OAuth import after Pinterest approves API access. Map board/Pins to folders and preserve source attribution.
+3. Test focus restoration and paste behavior across target apps, then package the Windows app for installation.
 
 ## Current limits
 
