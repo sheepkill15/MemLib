@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -49,8 +50,10 @@ class MemlibApp extends StatelessWidget {
     theme: ThemeData(
       useMaterial3: true,
       colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF7C5CDE), brightness: Brightness.dark),
-      scaffoldBackgroundColor: const Color(0xFF14121B),
-      cardTheme: const CardThemeData(color: Color(0xFF24202E)),
+      scaffoldBackgroundColor: const Color(0xFF121019),
+      appBarTheme: const AppBarTheme(backgroundColor: Color(0xFF1B1724), foregroundColor: Colors.white, elevation: 0),
+      cardTheme: CardThemeData(color: const Color(0xFF24202E), elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
+      inputDecorationTheme: InputDecorationTheme(filled: true, fillColor: const Color(0xFF211C2B), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14))),
     ),
     home: LibraryScreen(store: store, enableTray: enableTray, initialShortcut: initialShortcut),
   );
@@ -86,6 +89,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
   String giphyQuery = '';
   bool windowTransition = false;
   bool pasting = false;
+  bool draggingFiles = false;
   int selectedIndex = 0;
   String? error;
   List<GiphyResult> results = [];
@@ -112,6 +116,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
               openLibrary: () { if (mounted) unawaited(_openLibrary()); },
               openPicker: () { if (mounted && !picker) unawaited(_togglePicker()); },
               exitApp: () { if (mounted) unawaited(windowManager.close()); },
+              shortcutLabel: hotkey.debugName,
             );
             if (!ready) {
               windowsTray = null;
@@ -317,6 +322,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
       await ShortcutSettings.save(candidate);
       await hotKeyManager.unregister(hotkey);
       if (mounted) setState(() => hotkey = candidate);
+      windowsTray?.updateShortcutLabel(candidate.debugName);
     } catch (e) {
       await hotKeyManager.unregister(candidate).catchError((_) {});
       _showError('Shortcut unavailable: $e');
@@ -326,9 +332,18 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
   Future<void> _import() async {
     const images = XTypeGroup(label: 'Images', extensions: ['png', 'gif', 'jpg', 'jpeg', 'webp'], mimeTypes: ['image/png', 'image/gif', 'image/jpeg', 'image/webp']);
     final picked = await openFiles(acceptedTypeGroups: [images]);
-    if (picked.isEmpty) return;
+    await _importPaths(picked.map((e) => e.path).toList());
+  }
+
+  Future<void> _importPaths(List<String> paths) async {
+    if (paths.isEmpty) return;
+    final supported = paths.where((path) => RegExp(r'\.(png|gif|jpe?g|webp)$', caseSensitive: false).hasMatch(path)).toList();
+    if (supported.isEmpty) { _showError('Drop PNG, GIF, JPEG, or WebP files.'); return; }
     try {
-      await widget.store.importFiles(picked.map((e) => e.path).toList(), folderId: selectedFolder);
+      final before = widget.store.items.length;
+      await widget.store.importFiles(supported, folderId: selectedFolder);
+      final added = widget.store.items.length - before;
+      _showError(added == 0 ? 'No images were imported.' : 'Imported $added ${added == 1 ? 'item' : 'items'}.');
     } catch (e) { _showError('Import failed: $e'); }
   }
 
@@ -420,22 +435,43 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width > 720 && !picker;
+    final content = picker ? _pickerView() : Row(children: [
+      if (wide) SizedBox(width: 220, child: _sidebar()),
+      Expanded(child: Column(children: [
+        if (!picker) Padding(padding: const EdgeInsets.fromLTRB(16, 8, 16, 4), child: SegmentedButton<bool>(segments: const [ButtonSegment(value: false, label: Text('Library'), icon: Icon(Icons.collections_outlined)), ButtonSegment(value: true, label: Text('GIPHY'), icon: Icon(Icons.search))], selected: {giphyTab}, onSelectionChanged: (v) => _switchTab(v.first))),
+        if (giphyTab && !picker) Expanded(child: _giphyView()) else Expanded(child: _libraryView(wide)),
+      ])),
+    ]);
     return Scaffold(
       appBar: picker ? null : AppBar(
-        title: Text(picker ? 'Quick pick' : 'Memlib'),
+        title: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.auto_awesome_mosaic_rounded, color: Color(0xFFBDA7FF)), SizedBox(width: 10), Text('Memlib', style: TextStyle(fontWeight: FontWeight.w700))]),
         actions: [
           if (Platform.isWindows) IconButton(tooltip: picker ? 'Open library' : 'Quick picker · ${hotkey.debugName}', icon: Icon(picker ? Icons.open_in_full : Icons.bolt), onPressed: () => _togglePicker()),
           if (Platform.isWindows && !picker) IconButton(tooltip: 'Change quick picker shortcut', icon: const Icon(Icons.keyboard_outlined), onPressed: _changeShortcut),
           if (!picker) IconButton(tooltip: 'Import files', icon: const Icon(Icons.add_photo_alternate_outlined), onPressed: _import),
         ],
       ),
-      body: picker ? _pickerView() : Row(children: [
-        if (wide) SizedBox(width: 220, child: _sidebar()),
-        Expanded(child: Column(children: [
-          if (!picker) Padding(padding: const EdgeInsets.fromLTRB(16, 8, 16, 4), child: SegmentedButton<bool>(segments: const [ButtonSegment(value: false, label: Text('Library'), icon: Icon(Icons.collections_outlined)), ButtonSegment(value: true, label: Text('GIPHY'), icon: Icon(Icons.search))], selected: {giphyTab}, onSelectionChanged: (v) => _switchTab(v.first))),
-          if (giphyTab && !picker) Expanded(child: _giphyView()) else Expanded(child: _libraryView(wide)),
-        ])),
-      ]),
+      body: Platform.isWindows && !picker ? DropTarget(
+        onDragEntered: (_) => setState(() => draggingFiles = true),
+        onDragExited: (_) => setState(() => draggingFiles = false),
+        onDragDone: (details) {
+          setState(() => draggingFiles = false);
+          unawaited(_importPaths(details.files.map((file) => file.path).toList()));
+        },
+        child: Stack(children: [
+          content,
+          if (draggingFiles) Positioned.fill(child: IgnorePointer(child: ColoredBox(
+            color: const Color(0xE0181426),
+            child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.file_download_outlined, size: 60, color: Color(0xFFBDA7FF)),
+              const SizedBox(height: 12),
+              const Text('Drop images to import', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              Text(selectedFolder == null ? 'Into your library' : 'Into ${widget.store.folders.where((folder) => folder.id == selectedFolder).firstOrNull?.name ?? 'your library'}', style: const TextStyle(color: Colors.white70)),
+            ])),
+          ))),
+        ]),
+      ) : content,
     );
   }
 
@@ -508,6 +544,14 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
   );
 
   Widget _libraryView(bool wide) => Column(children: [
+    Padding(padding: const EdgeInsets.fromLTRB(16, 12, 16, 0), child: Row(children: [
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(selectedFolder == null ? favoritesOnly ? 'Favourites' : 'Your library' : widget.store.folders.where((folder) => folder.id == selectedFolder).firstOrNull?.name ?? 'Your library', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 3),
+        Text('${visibleItems.length} ${visibleItems.length == 1 ? 'item' : 'items'}${selectedFolder == null && !favoritesOnly ? ' · GIFs and stickers ready to share' : ''}', style: const TextStyle(color: Colors.white60, fontSize: 12)),
+      ])),
+      if (wide) FilledButton.icon(onPressed: _import, icon: const Icon(Icons.add_photo_alternate_outlined), label: const Text('Import')),
+    ])),
     if (!wide) SizedBox(height: 52, child: ListView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 12), children: [
       ChoiceChip(label: const Text('All'), selected: selectedFolder == null && !favoritesOnly, onSelected: (_) => setState(() { selectedFolder = null; favoritesOnly = false; })),
       const SizedBox(width: 8), ChoiceChip(label: const Text('★ Favourites'), selected: favoritesOnly, onSelected: (_) => setState(() { selectedFolder = null; favoritesOnly = true; })),
@@ -515,7 +559,16 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
       if (!picker) IconButton(tooltip: 'New folder', onPressed: () async { final name = await _askName('New folder'); if (name != null) await widget.store.addFolder(name); }, icon: const Icon(Icons.create_new_folder_outlined)),
     ])),
     Padding(padding: const EdgeInsets.all(16), child: TextField(focusNode: searchFocus, controller: searchController, onChanged: (_) => setState(() {}), decoration: InputDecoration(prefixIcon: const Icon(Icons.search), hintText: 'Search your library', border: OutlineInputBorder(borderRadius: BorderRadius.circular(14))))),
-    Expanded(child: visibleItems.isEmpty ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.collections_bookmark_outlined, size: 60), const SizedBox(height: 12), Text(widget.store.items.isEmpty ? 'Your collection starts here' : 'Nothing found'), const SizedBox(height: 12), if (!picker) FilledButton.icon(onPressed: _import, icon: const Icon(Icons.add), label: const Text('Import stickers or GIFs'))])) : GridView.builder(
+    Expanded(child: visibleItems.isEmpty ? Center(child: SingleChildScrollView(child: Padding(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [
+      Container(width: 92, height: 92, decoration: BoxDecoration(color: const Color(0xFF2D2540), borderRadius: BorderRadius.circular(26)), child: const Icon(Icons.collections_bookmark_outlined, size: 46, color: Color(0xFFBDA7FF))),
+      const SizedBox(height: 18),
+      Text(widget.store.items.isEmpty ? 'Build your collection' : 'Nothing found', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
+      const SizedBox(height: 6),
+      Text(widget.store.items.isEmpty ? 'Import GIFs and stickers, then reach them from anywhere with the quick picker.' : 'Try another search or choose a different folder.', textAlign: TextAlign.center, style: const TextStyle(color: Colors.white60)),
+      const SizedBox(height: 18),
+      FilledButton.icon(onPressed: _import, icon: const Icon(Icons.add_photo_alternate_outlined), label: const Text('Import images')),
+      if (Platform.isWindows) const Padding(padding: EdgeInsets.only(top: 10), child: Text('You can also drop images anywhere in this window', style: TextStyle(color: Colors.white54, fontSize: 12))),
+    ])))) : GridView.builder(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
       gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(maxCrossAxisExtent: picker ? 140 : 180, childAspectRatio: 0.85, crossAxisSpacing: 12, mainAxisSpacing: 12),
       itemCount: visibleItems.length,

@@ -10,7 +10,7 @@ When the Windows window is hidden, use the Memlib tray icon to reopen the librar
 2. Run `flutter pub get`.
 3. Run `flutter run -d windows` or `flutter run -d android`.
 
-The local library lives under the app support directory. Imported files are copied into app storage, so moving the original files does not break the library.
+The local library lives under the app support directory. Imported files are copied into app storage, so moving the original files does not break the library. On Windows, drag PNG, GIF, JPEG, or WebP files from Explorer into the library window to import them into the selected folder.
 
 ## Optional service configuration
 

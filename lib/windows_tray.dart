@@ -6,7 +6,7 @@ class WindowsTray {
   tray.Menu? _menu;
   final _items = <tray.MenuItem>[];
 
-  bool initialize({required void Function() openLibrary, required void Function() openPicker, required void Function() exitApp}) {
+  bool initialize({required void Function() openLibrary, required void Function() openPicker, required void Function() exitApp, required String shortcutLabel}) {
     final icon = tray.TrayIcon.create();
     if (icon == null) return false;
     final image = tray.ImageAsset.fromAsset('assets/tray_icon.ico');
@@ -18,7 +18,7 @@ class WindowsTray {
     _image = image;
     _menu = menu;
     icon.icon = image;
-    icon.setTooltip('Memlib · Ctrl+Alt+V for quick picker');
+    updateShortcutLabel(shortcutLabel);
     icon.addListener((event) {
       if (event is tray.TrayIconClickedEvent || event is tray.TrayIconDoubleClickedEvent) openLibrary();
     });
@@ -40,6 +40,8 @@ class WindowsTray {
     dispose();
     return false;
   }
+
+  void updateShortcutLabel(String label) => _icon?.setTooltip('Memlib · $label for quick picker');
 
   void dispose() {
     _icon?.dispose();
