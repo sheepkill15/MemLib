@@ -62,20 +62,48 @@ class LibraryItem {
 class LibraryStore extends ChangeNotifier {
   final folders = <LibraryFolder>[];
   final items = <LibraryItem>[];
+  final folderVersions = <String, String>{};
+  final itemVersions = <String, String>{};
+  final dirtyFolders = <String>{};
+  final dirtyItems = <String>{};
+  final deletedFolders = <String>{};
+  final deletedItems = <String>{};
+  String? accountId;
   late final Directory root;
   late final Directory media;
 
-  Future<void> load() async {
-    root = Directory('${(await getApplicationSupportDirectory()).path}${Platform.pathSeparator}library');
+  Future<void> load() => openAccount(null);
+
+  Future<void> openAccount(String? userId) async {
+    if (userId != null && !RegExp(r'^[0-9a-fA-F-]{36}$').hasMatch(userId)) throw ArgumentError.value(userId, 'userId');
+    final support = await getApplicationSupportDirectory();
+    accountId = userId;
+    root = Directory(userId == null
+      ? '${support.path}${Platform.pathSeparator}library'
+      : '${support.path}${Platform.pathSeparator}accounts${Platform.pathSeparator}$userId${Platform.pathSeparator}library');
     media = Directory('${root.path}${Platform.pathSeparator}media');
     await media.create(recursive: true);
+    folders.clear();
+    items.clear();
+    folderVersions.clear();
+    itemVersions.clear();
+    dirtyFolders.clear();
+    dirtyItems.clear();
+    deletedFolders.clear();
+    deletedItems.clear();
     final index = File('${root.path}${Platform.pathSeparator}index.json');
     final backup = File('${index.path}.bak');
     if (!await index.exists() && await backup.exists()) await backup.rename(index.path);
-    if (!await index.exists()) return;
+    if (!await index.exists()) { notifyListeners(); return; }
     final data = jsonDecode(await index.readAsString()) as Map<String, dynamic>;
     folders.addAll((data['folders'] as List<dynamic>? ?? []).map((e) => LibraryFolder.fromJson(e as Map<String, dynamic>)));
     items.addAll((data['items'] as List<dynamic>? ?? []).map((e) => LibraryItem.fromJson(e as Map<String, dynamic>)));
+    folderVersions.addAll((data['folderVersions'] as Map<String, dynamic>? ?? {}).map((key, value) => MapEntry(key, value as String)));
+    itemVersions.addAll((data['itemVersions'] as Map<String, dynamic>? ?? {}).map((key, value) => MapEntry(key, value as String)));
+    dirtyFolders.addAll((data['dirtyFolders'] as List<dynamic>? ?? []).cast<String>());
+    dirtyItems.addAll((data['dirtyItems'] as List<dynamic>? ?? []).cast<String>());
+    deletedFolders.addAll((data['deletedFolders'] as List<dynamic>? ?? []).cast<String>());
+    deletedItems.addAll((data['deletedItems'] as List<dynamic>? ?? []).cast<String>());
     notifyListeners();
   }
 
@@ -86,9 +114,15 @@ class LibraryStore extends ChangeNotifier {
     final temp = File('${index.path}.tmp');
     final backup = File('${index.path}.bak');
     await temp.writeAsString(jsonEncode({
-      'version': 1,
+      'version': 2,
       'folders': folders.map((e) => e.toJson()).toList(),
       'items': items.map((e) => e.toJson()).toList(),
+      'folderVersions': folderVersions,
+      'itemVersions': itemVersions,
+      'dirtyFolders': dirtyFolders.toList(),
+      'dirtyItems': dirtyItems.toList(),
+      'deletedFolders': deletedFolders.toList(),
+      'deletedItems': deletedItems.toList(),
     }), flush: true);
     if (await backup.exists()) await backup.delete();
     if (await index.exists()) await index.rename(backup.path);
@@ -105,24 +139,31 @@ class LibraryStore extends ChangeNotifier {
   Future<void> addFolder(String name, {String? parentId}) async {
     final clean = name.trim();
     if (clean.isEmpty) return;
-    folders.add(LibraryFolder(id: _uuid.v4(), name: clean, parentId: parentId));
+    final folder = LibraryFolder(id: _uuid.v4(), name: clean, parentId: parentId);
+    folders.add(folder);
+    dirtyFolders.add(folder.id);
     await _save();
   }
 
   Future<void> renameFolder(LibraryFolder folder, String name) async {
     if (name.trim().isEmpty) return;
     folder.name = name.trim();
+    dirtyFolders.add(folder.id);
     await _save();
   }
 
   Future<void> deleteFolder(LibraryFolder folder) async {
     for (final child in folders.where((e) => e.parentId == folder.id)) {
       child.parentId = folder.parentId;
+      dirtyFolders.add(child.id);
     }
     for (final item in items.where((e) => e.folderId == folder.id)) {
       item.folderId = folder.parentId;
+      dirtyItems.add(item.id);
     }
     folders.remove(folder);
+    dirtyFolders.remove(folder.id);
+    deletedFolders.add(folder.id);
     await _save();
   }
 
@@ -136,13 +177,15 @@ class LibraryStore extends ChangeNotifier {
       final id = _uuid.v4();
       final filename = '$id.$extension';
       await source.copy('${media.path}${Platform.pathSeparator}$filename');
-      items.add(LibraryItem(
+      final item = LibraryItem(
         id: id,
         name: name.replaceFirst(RegExp(r'\.[^.]+$'), ''),
         filename: filename,
         kind: extension == 'gif' ? 'gif' : 'sticker',
         folderId: folderId,
-      ));
+      );
+      items.add(item);
+      dirtyItems.add(item.id);
     }
     await _save();
   }
@@ -151,18 +194,119 @@ class LibraryStore extends ChangeNotifier {
     if (name != null && name.trim().isNotEmpty) item.name = name.trim();
     if (move) item.folderId = folderId;
     if (favorite != null) item.favorite = favorite;
+    dirtyItems.add(item.id);
     await _save();
   }
 
   Future<void> markUsed(LibraryItem item) async {
     item.useCount++;
+    dirtyItems.add(item.id);
     await _save();
   }
 
   Future<void> deleteItem(LibraryItem item) async {
     items.remove(item);
+    dirtyItems.remove(item.id);
+    deletedItems.add(item.id);
     final file = fileFor(item);
     if (await file.exists()) await file.delete();
+    await _save();
+  }
+
+  Future<bool> hasGuestLibrary() async {
+    final support = await getApplicationSupportDirectory();
+    final index = File('${support.path}${Platform.pathSeparator}library${Platform.pathSeparator}index.json');
+    if (!await index.exists()) return false;
+    final data = jsonDecode(await index.readAsString()) as Map<String, dynamic>;
+    return (data['folders'] as List<dynamic>? ?? []).isNotEmpty || (data['items'] as List<dynamic>? ?? []).isNotEmpty;
+  }
+
+  Future<int> importGuestLibrary() async {
+    if (accountId == null) throw StateError('Sign in before importing the local library');
+    final support = await getApplicationSupportDirectory();
+    final guestRoot = Directory('${support.path}${Platform.pathSeparator}library');
+    final index = File('${guestRoot.path}${Platform.pathSeparator}index.json');
+    if (!await index.exists()) return 0;
+    final data = jsonDecode(await index.readAsString()) as Map<String, dynamic>;
+    final guestFolders = (data['folders'] as List<dynamic>? ?? []).map((e) => LibraryFolder.fromJson(e as Map<String, dynamic>)).toList();
+    final folderIds = {for (final folder in guestFolders) folder.id: _uuid.v4()};
+    for (final folder in guestFolders) {
+      final copy = LibraryFolder(id: folderIds[folder.id]!, name: folder.name, parentId: folder.parentId == null ? null : folderIds[folder.parentId]);
+      folders.add(copy);
+      dirtyFolders.add(copy.id);
+    }
+    var copied = 0;
+    for (final raw in data['items'] as List<dynamic>? ?? []) {
+      final item = LibraryItem.fromJson(raw as Map<String, dynamic>);
+      final source = File('${guestRoot.path}${Platform.pathSeparator}media${Platform.pathSeparator}${item.filename}');
+      if (!await source.exists()) continue;
+      final extension = item.filename.split('.').last.toLowerCase();
+      final id = _uuid.v4();
+      final filename = '$id.$extension';
+      await source.copy('${media.path}${Platform.pathSeparator}$filename');
+      final copy = LibraryItem(id: id, name: item.name, filename: filename, kind: item.kind, folderId: item.folderId == null ? null : folderIds[item.folderId], favorite: item.favorite, useCount: item.useCount);
+      items.add(copy);
+      dirtyItems.add(copy.id);
+      copied++;
+    }
+    await _save();
+    return copied;
+  }
+
+  Future<void> acknowledgeFolder(String id, String? version, {Map<String, dynamic>? expected}) async {
+    if (version == null) {
+      if (folders.any((folder) => folder.id == id)) return;
+      deletedFolders.remove(id);
+      folderVersions.remove(id);
+    } else {
+      folderVersions[id] = version;
+      final current = folders.where((folder) => folder.id == id).firstOrNull;
+      if (current != null && expected != null && jsonEncode(current.toJson()) == jsonEncode(expected)) dirtyFolders.remove(id);
+    }
+    await _save();
+  }
+
+  Future<void> acknowledgeItem(String id, String? version, {Map<String, dynamic>? expected}) async {
+    if (version == null) {
+      if (items.any((item) => item.id == id)) return;
+      deletedItems.remove(id);
+      itemVersions.remove(id);
+    } else {
+      itemVersions[id] = version;
+      final current = items.where((item) => item.id == id).firstOrNull;
+      if (current != null && expected != null && jsonEncode(current.toJson()) == jsonEncode(expected)) dirtyItems.remove(id);
+    }
+    await _save();
+  }
+
+  Future<void> mergeRemote({required Map<String, LibraryFolder> remoteFolders, required Map<String, LibraryItem> remoteItems, required Map<String, String> remoteFolderVersions, required Map<String, String> remoteItemVersions}) async {
+    final removedFolderIds = folders.where((folder) => !dirtyFolders.contains(folder.id) && !deletedFolders.contains(folder.id) && !remoteFolders.containsKey(folder.id)).map((folder) => folder.id).toList();
+    folders.removeWhere((folder) => removedFolderIds.contains(folder.id));
+    for (final id in removedFolderIds) { folderVersions.remove(id); }
+    for (final entry in remoteFolders.entries) {
+      if (dirtyFolders.contains(entry.key) || deletedFolders.contains(entry.key)) continue;
+      folders.removeWhere((folder) => folder.id == entry.key);
+      folders.add(entry.value);
+      folderVersions[entry.key] = remoteFolderVersions[entry.key]!;
+    }
+    final removed = items.where((item) => !dirtyItems.contains(item.id) && !deletedItems.contains(item.id) && !remoteItems.containsKey(item.id)).toList();
+    items.removeWhere((item) => removed.contains(item));
+    for (final item in removed) {
+      final file = fileFor(item);
+      if (await file.exists()) await file.delete();
+      itemVersions.remove(item.id);
+    }
+    for (final entry in remoteItems.entries) {
+      if (dirtyItems.contains(entry.key) || deletedItems.contains(entry.key)) continue;
+      final old = items.where((item) => item.id == entry.key).firstOrNull;
+      if (old != null && old.filename != entry.value.filename) {
+        final oldFile = fileFor(old);
+        if (await oldFile.exists()) await oldFile.delete();
+      }
+      items.removeWhere((item) => item.id == entry.key);
+      items.add(entry.value);
+      itemVersions[entry.key] = remoteItemVersions[entry.key]!;
+    }
     await _save();
   }
 }
