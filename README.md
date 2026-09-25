@@ -1,8 +1,8 @@
 # Memlib
 
-A sticker and GIF library for Windows and Android. The library editor handles importing, folders, favourites and search. On Windows, **Ctrl+Alt+V** opens a frameless popup by default; type to search, use arrow keys to move, press Enter to paste, or Escape to dismiss. Selecting an item attempts to restore the previously focused input and paste into it. Clicking elsewhere closes the popup. Use the keyboard button in the library toolbar to change the global shortcut. Android currently provides the library and clipboard copy; a keyboard/IME is the next platform milestone.
+A sticker and GIF library for Windows and Android. The library editor handles importing, folders, favourites and search. On Windows, **Ctrl+Alt+V** opens a frameless popup by default; type to search, use arrow keys to move, press Enter to paste, or Escape to dismiss. Selecting an item attempts to restore the previously focused input and paste into it. Clicking elsewhere closes the popup. Use Settings in the library toolbar to change the global shortcut or enable launch at sign-in. Android currently provides the library and clipboard copy; a keyboard/IME is the next platform milestone.
 
-When the Windows window is hidden, use the Memlib tray icon to reopen the library or launch the picker. The tray menu also has an Exit action.
+When the Windows window is hidden, use the Memlib tray icon to reopen the library or launch the picker. The tray menu also has an Exit action. Launch at sign-in is off by default; when enabled, Memlib starts in the tray without opening the library window.
 
 ## Run locally
 
@@ -38,7 +38,7 @@ GIPHY results are displayed in their own view with attribution, including inside
 1. Supabase sign-in, sync, and conflict handling with the local cache retained for fast picker opening.
 2. Android keyboard with rich GIF/sticker insertion, plus a share target for apps that do not accept rich keyboard content.
 3. Pinterest OAuth import after Pinterest approves API access. Map board/Pins to folders and preserve source attribution.
-4. Windows launch on sign-in and testing focus restoration and paste behavior across target apps.
+4. Test focus restoration and paste behavior across target apps, then package the Windows app for installation.
 
 ## Current limits
 

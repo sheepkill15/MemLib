@@ -6,6 +6,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
+import 'package:launch_at_startup/launch_at_startup.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -19,16 +20,17 @@ import 'windows_tray.dart';
 const supabaseUrl = String.fromEnvironment('SUPABASE_URL', defaultValue: String.fromEnvironment('NEXT_PUBLIC_SUPABASE_URL'));
 const supabasePublishableKey = String.fromEnvironment('SUPABASE_PUBLISHABLE_KEY', defaultValue: String.fromEnvironment('NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY'));
 
-Future<void> main() async {
+Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   if (supabaseUrl.isNotEmpty && supabasePublishableKey.isNotEmpty) {
     await Supabase.initialize(url: supabaseUrl, publishableKey: supabasePublishableKey);
   }
   if (Platform.isWindows) {
+    launchAtStartup.setup(appName: 'Memlib', appPath: '"${Platform.resolvedExecutable}"', args: ['--background']);
     await windowManager.ensureInitialized();
     await windowManager.waitUntilReadyToShow(
       const WindowOptions(size: Size(1050, 720), minimumSize: Size(600, 500), title: 'Memlib'),
-      () async => windowManager.show(),
+      () async { if (args.contains('--background')) { await windowManager.hide(); } else { await windowManager.show(); } },
     );
   }
   final store = LibraryStore();
@@ -90,6 +92,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
   bool windowTransition = false;
   bool pasting = false;
   bool draggingFiles = false;
+  bool startupEnabled = false;
   int selectedIndex = 0;
   String? error;
   List<GiphyResult> results = [];
@@ -101,6 +104,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
     super.initState();
     widget.store.addListener(_refresh);
     if (Platform.isWindows) {
+      if (widget.enableTray) unawaited(_loadStartupSetting());
       windowManager.addListener(this);
       HardwareKeyboard.instance.addHandler(_handlePickerKey);
       hotkey = widget.initialShortcut ?? ShortcutSettings.defaultShortcut();
@@ -148,6 +152,24 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
   }
 
   void _refresh() => setState(() {});
+
+  Future<void> _loadStartupSetting() async {
+    try {
+      final enabled = await launchAtStartup.isEnabled();
+      if (mounted) setState(() => startupEnabled = enabled);
+    } catch (e) {
+      debugPrint('Could not read launch at sign-in setting: $e');
+    }
+  }
+
+  Future<void> _toggleStartup() async {
+    try {
+      final enabled = startupEnabled ? await launchAtStartup.disable() : await launchAtStartup.enable();
+      if (!enabled) throw StateError('Windows did not accept the change');
+      await _loadStartupSetting();
+      _showError(startupEnabled ? 'Memlib will start in the tray when you sign in.' : 'Launch at sign-in is off.');
+    } catch (e) { _showError('Could not change launch at sign-in: $e'); }
+  }
 
   @override
   void onWindowBlur() {
@@ -447,7 +469,13 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
         title: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.auto_awesome_mosaic_rounded, color: Color(0xFFBDA7FF)), SizedBox(width: 10), Text('Memlib', style: TextStyle(fontWeight: FontWeight.w700))]),
         actions: [
           if (Platform.isWindows) IconButton(tooltip: picker ? 'Open library' : 'Quick picker · ${hotkey.debugName}', icon: Icon(picker ? Icons.open_in_full : Icons.bolt), onPressed: () => _togglePicker()),
-          if (Platform.isWindows && !picker) IconButton(tooltip: 'Change quick picker shortcut', icon: const Icon(Icons.keyboard_outlined), onPressed: _changeShortcut),
+          if (Platform.isWindows && !picker) PopupMenuButton<String>(tooltip: 'Settings', icon: const Icon(Icons.settings_outlined), onSelected: (value) {
+            if (value == 'shortcut') unawaited(_changeShortcut());
+            if (value == 'startup') unawaited(_toggleStartup());
+          }, itemBuilder: (_) => [
+            const PopupMenuItem(value: 'shortcut', child: Text('Change picker shortcut')),
+            CheckedPopupMenuItem(value: 'startup', checked: startupEnabled, child: const Text('Launch at sign-in')),
+          ]),
           if (!picker) IconButton(tooltip: 'Import files', icon: const Icon(Icons.add_photo_alternate_outlined), onPressed: _import),
         ],
       ),
