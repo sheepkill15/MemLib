@@ -43,15 +43,31 @@ class MediaActions {
     if (Platform.isAndroid) {
       await _androidClipboard.invokeMethod<void>('copyFile', {'path': file.path});
     } else if (Platform.isWindows) {
-      if (file.path.toLowerCase().endsWith('.png')) {
+      if (RegExp(r'\.(png|jpe?g)$', caseSensitive: false).hasMatch(file.path)) {
         await Pasteboard.writeImage(await file.readAsBytes());
       } else {
+        await _clearWindowsClipboard();
         final copied = await Pasteboard.writeFiles([file.path]);
         if (!copied) throw StateError('Could not put file on clipboard');
       }
     } else {
       throw UnsupportedError('Clipboard is unavailable on this platform');
     }
+  }
+
+  Future<void> _clearWindowsClipboard() async {
+    for (var attempt = 0; attempt < 5; attempt++) {
+      if (OpenClipboard(0) != 0) {
+        try {
+          if (EmptyClipboard() == 0) throw StateError('Could not clear clipboard');
+          return;
+        } finally {
+          CloseClipboard();
+        }
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    throw StateError('Clipboard is busy');
   }
 
   Future<void> copyBytes(Uint8List bytes, String extension) async {
@@ -67,11 +83,11 @@ class MediaActions {
     await copyFile(transient);
   }
 
-  Future<bool> pasteIntoPreviousWindow() async {
+  Future<bool> pasteIntoPreviousWindow({bool hideWindow = true}) async {
     if (!Platform.isWindows || previousWindow == null || previousWindow == 0) return false;
     final target = previousWindow!;
     if (IsWindow(target) == 0) return false;
-    await windowManager.hide();
+    if (hideWindow) await windowManager.hide();
     await Future<void>.delayed(const Duration(milliseconds: 80));
     if (SetForegroundWindow(target) == 0) return false;
     await Future<void>.delayed(const Duration(milliseconds: 80));

@@ -395,12 +395,12 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
     }
     pasting = true;
     try {
-      final pasted = await actions.pasteIntoPreviousWindow();
-      if (pasted) {
-        setState(() => picker = false);
-        actions.clearTarget();
-        await _restoreLibraryWindow();
-      } else {
+      await windowManager.hide();
+      setState(() => picker = false);
+      await _restoreLibraryWindow();
+      final pasted = await actions.pasteIntoPreviousWindow(hideWindow: false);
+      actions.clearTarget();
+      if (!pasted) {
         await windowManager.show();
         await windowManager.focus();
         _showError('Copied. Automatic paste did not work; press Ctrl+V in the target app.');

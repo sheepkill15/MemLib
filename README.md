@@ -42,6 +42,6 @@ GIPHY results are displayed in their own view with attribution, including inside
 
 ## Current limits
 
-The Windows paste uses an image clipboard entry for PNG files, a file clipboard entry for other formats, and simulated Ctrl+V. A target app may accept an image, animated GIF file, or neither depending on its editor. The selected item remains on the clipboard when automatic paste cannot complete. The Android app copies a media file URI to the clipboard, but cannot insert it directly into another app until the keyboard is implemented. GIPHY selections use a temporary transfer file, deleted after an hour when the app next copies GIPHY media.
+The Windows paste uses an image clipboard entry for PNG and JPEG files, a file clipboard entry for GIF and WebP files, and simulated Ctrl+V. A target app may accept an image, animated GIF file, or neither depending on its editor. The selected item remains on the clipboard when automatic paste cannot complete. The Android app copies a media file URI to the clipboard, but cannot insert it directly into another app until the keyboard is implemented. GIPHY selections use a temporary transfer file, deleted after an hour when the app next copies GIPHY media.
 
 Windows builds require Visual Studio's **Desktop development with C++** workload, MSVC build tools, CMake tools, and Windows SDK. Run `flutter doctor -v` to check the local installation.
