@@ -145,14 +145,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   Future<String?> _askName(String title, {String initial = ''}) async {
-    final controller = TextEditingController(text: initial);
-    final value = await showDialog<String>(context: context, builder: (context) => AlertDialog(
-      title: Text(title),
-      content: TextField(controller: controller, autofocus: true, decoration: const InputDecoration(labelText: 'Name'), onSubmitted: (_) => Navigator.pop(context, controller.text)),
-      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')), FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('Save'))],
-    ));
-    controller.dispose();
-    return value;
+    return showDialog<String>(context: context, builder: (_) => _NameDialog(title: title, initial: initial));
   }
 
   Future<void> _useItem(LibraryItem item) async {
@@ -240,7 +233,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     );
   }
 
-  Widget _sidebar() => Container(
+  Widget _sidebar() => Material(
     color: const Color(0xFF1C1924),
     child: Column(children: [
       ListTile(leading: const Icon(Icons.grid_view), title: const Text('All items'), selected: selectedFolder == null && !favoritesOnly, onTap: () => setState(() { selectedFolder = null; favoritesOnly = false; })),
@@ -300,4 +293,44 @@ class _LibraryScreenState extends State<LibraryScreen> {
       itemBuilder: (context, index) { final item = results[index]; return Card(clipBehavior: Clip.antiAlias, child: InkWell(onTap: busy ? null : () => _useGiphy(item), child: Image.network(item.previewUrl, fit: BoxFit.cover, errorBuilder: (_, _, _) => const Icon(Icons.broken_image_outlined)))); },
     )),
   ]);
+}
+
+class _NameDialog extends StatefulWidget {
+  const _NameDialog({required this.title, required this.initial});
+  final String title;
+  final String initial;
+
+  @override
+  State<_NameDialog> createState() => _NameDialogState();
+}
+
+class _NameDialogState extends State<_NameDialog> {
+  late final TextEditingController controller;
+
+  @override
+  void initState() {
+    super.initState();
+    controller = TextEditingController(text: widget.initial);
+  }
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: Text(widget.title),
+    content: TextField(
+      controller: controller,
+      autofocus: true,
+      decoration: const InputDecoration(labelText: 'Name'),
+      onSubmitted: (_) => Navigator.pop(context, controller.text),
+    ),
+    actions: [
+      TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+      FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('Save')),
+    ],
+  );
 }
