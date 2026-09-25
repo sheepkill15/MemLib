@@ -31,15 +31,14 @@ flutter run -d windows --dart-define=GIPHY_WINDOWS_KEY=YOUR_KEY
 flutter run -d android --dart-define=GIPHY_ANDROID_KEY=YOUR_KEY
 ```
 
-GIPHY results are displayed in their own view with attribution. The app fetches a selected GIF to copy it, and does not store GIPHY media in the library. GIPHY beta keys currently allow 100 API calls per hour. Review their current API terms before release.
+GIPHY results are displayed in their own view with attribution, including inside the Windows quick picker. Search is submitted explicitly to conserve API calls, and more results can be loaded on demand. Choosing a result copies it and, when opened from another app with the quick shortcut, attempts to paste it into the previous input. The app does not store GIPHY media in the library. GIPHY beta keys currently allow 100 API calls per hour. Review their current API terms before release.
 
 ## Next milestones
 
 1. Supabase sign-in, sync, and conflict handling with the local cache retained for fast picker opening.
 2. Android keyboard with rich GIF/sticker insertion, plus a share target for apps that do not accept rich keyboard content.
 3. Pinterest OAuth import after Pinterest approves API access. Map board/Pins to folders and preserve source attribution.
-4. Optional live GIF search providers. [KLIPY](https://klipy.com/developers) advertises unlimited production requests after approval, while its test key has 100 calls/hour; [its API terms](https://klipy.com/support/api-terms) prohibit storing its media in a user collection. [gifs.chat](https://gifs.chat/docs) states a free limit of 120 requests/minute and 20,000/day, but currently lists only about 10,600 GIFs. [Its terms](https://gifs.chat/terms) permit building on the API but do not grant rights to reuse individual GIFs or re-serve the corpus. Keep provider search separate from imported library items, and review any provider before shipping an integration.
-5. Windows launch on sign-in and testing focus restoration and paste behavior across target apps.
+4. Windows launch on sign-in and testing focus restoration and paste behavior across target apps.
 
 ## Current limits
 

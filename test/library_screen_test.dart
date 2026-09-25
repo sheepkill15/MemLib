@@ -65,6 +65,10 @@ void main() {
     expect(find.text('Find a sticker or GIF'), findsOneWidget);
     expect(find.text('Type to search   ·   Arrow keys to move   ·   Enter to paste   ·   Esc to close'), findsOneWidget);
     expect(find.byType(AppBar), findsNothing);
+    await tester.tap(find.text('GIPHY'));
+    await tester.pumpAndSettle();
+    expect(find.text('Search GIPHY'), findsOneWidget);
+    expect(find.text('Add a GIPHY API key to search'), findsOneWidget);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
     expect(find.byType(AppBar), findsOneWidget);

@@ -72,12 +72,18 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
   final searchController = TextEditingController();
   final giphyController = TextEditingController();
   final searchFocus = FocusNode();
+  final giphyFocus = FocusNode();
   String? selectedFolder;
   bool favoritesOnly = false;
   bool picker = false;
   bool giphyTab = false;
   bool stickerSearch = false;
   bool busy = false;
+  bool giphyHasMore = false;
+  bool giphyNavigating = false;
+  int giphyOffset = 0;
+  int giphyRequest = 0;
+  String giphyQuery = '';
   bool windowTransition = false;
   bool pasting = false;
   int selectedIndex = 0;
@@ -131,6 +137,8 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
     searchController.dispose();
     giphyController.dispose();
     searchFocus.dispose();
+    giphyFocus.dispose();
+    giphy.dispose();
     super.dispose();
   }
 
@@ -142,7 +150,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
   }
 
   bool _handlePickerKey(KeyEvent event) {
-    if (!picker || windowTransition || pasting || event is! KeyDownEvent) return false;
+    if (!picker || windowTransition || pasting || busy || event is! KeyDownEvent) return false;
     final key = event.logicalKey;
     if (key == LogicalKeyboardKey.escape) {
       unawaited(_dismissPicker());
@@ -156,12 +164,21 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
       _ => null,
     };
     if (direction != null) {
-      _selectPickerIndex(movePickerSelection(selectedIndex, visibleItems.length, 4, direction));
+      if (giphyTab) giphyNavigating = true;
+      _selectPickerIndex(movePickerSelection(selectedIndex, giphyTab ? results.length : visibleItems.length, 4, direction));
       return true;
     }
     if (key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.numpadEnter) {
-      final items = visibleItems;
-      if (items.isNotEmpty) unawaited(_useItem(items[selectedIndex.clamp(0, items.length - 1)]));
+      if (giphyTab) {
+        if (!giphyNavigating || results.isEmpty) {
+          unawaited(_searchGiphy());
+        } else if (results.isNotEmpty) {
+          unawaited(_useGiphy(results[selectedIndex.clamp(0, results.length - 1)]));
+        }
+      } else {
+        final items = visibleItems;
+        if (items.isNotEmpty) unawaited(_useItem(items[selectedIndex.clamp(0, items.length - 1)]));
+      }
       return true;
     }
     return false;
@@ -169,12 +186,20 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
 
   void _selectPickerIndex(int index) {
     setState(() => selectedIndex = index);
-    if (index < 0 || index >= visibleItems.length) return;
-    final id = visibleItems[index].id;
+    final itemsLength = giphyTab ? results.length : visibleItems.length;
+    if (index < 0 || index >= itemsLength) return;
+    final id = giphyTab ? 'giphy-${results[index].id}' : 'picker-${visibleItems[index].id}';
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !picker) return;
-      final card = GlobalObjectKey('picker-$id').currentContext;
+      final card = GlobalObjectKey(id).currentContext;
       if (card != null) Scrollable.ensureVisible(card, duration: const Duration(milliseconds: 110), alignment: 0.2);
+    });
+  }
+
+  void _switchTab(bool giphySelected) {
+    setState(() { giphyTab = giphySelected; selectedIndex = 0; giphyNavigating = false; });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) (giphySelected ? giphyFocus : searchFocus).requestFocus();
     });
   }
 
@@ -320,41 +345,53 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
     try {
       await actions.copyFile(widget.store.fileFor(item));
       await widget.store.markUsed(item);
-      if (picker && Platform.isWindows) {
-        if (actions.previousWindow != null) {
-          pasting = true;
-          try {
-            final pasted = await actions.pasteIntoPreviousWindow();
-            if (pasted) {
-              setState(() => picker = false);
-              actions.clearTarget();
-              await _restoreLibraryWindow();
-            } else {
-              await windowManager.show();
-              await windowManager.focus();
-              _showError('Copied. Automatic paste did not work; press Ctrl+V in the target app.');
-            }
-          } finally {
-            pasting = false;
-          }
-        } else {
-          await _openLibrary();
-          _showError('Copied to clipboard');
-        }
-      } else {
-        _showError('Copied to clipboard');
-      }
+      await _afterCopy();
     } catch (e) { _showError('Could not copy: $e'); }
   }
 
-  Future<void> _searchGiphy() async {
-    if (!giphy.configured) return;
-    setState(() { busy = true; error = null; });
+  Future<void> _afterCopy() async {
+    if (!picker || !Platform.isWindows) { _showError('Copied to clipboard'); return; }
+    if (actions.previousWindow == null) {
+      await _openLibrary();
+      _showError('Copied to clipboard');
+      return;
+    }
+    pasting = true;
     try {
-      final found = await giphy.search(giphyController.text, stickers: stickerSearch);
-      if (mounted) setState(() => results = found);
-    } catch (e) { if (mounted) setState(() => error = '$e'); }
-    finally { if (mounted) setState(() => busy = false); }
+      final pasted = await actions.pasteIntoPreviousWindow();
+      if (pasted) {
+        setState(() => picker = false);
+        actions.clearTarget();
+        await _restoreLibraryWindow();
+      } else {
+        await windowManager.show();
+        await windowManager.focus();
+        _showError('Copied. Automatic paste did not work; press Ctrl+V in the target app.');
+      }
+    } finally {
+      pasting = false;
+    }
+  }
+
+  Future<void> _searchGiphy({bool more = false}) async {
+    if (!giphy.configured || busy) return;
+    final query = more ? giphyQuery : giphyController.text.trim();
+    if (query.isEmpty || (more && !giphyHasMore)) return;
+    final offset = more ? giphyOffset : 0;
+    final request = ++giphyRequest;
+    setState(() { busy = true; error = null; if (!more) { results = []; selectedIndex = 0; giphyHasMore = false; giphyNavigating = false; } });
+    try {
+      final page = await giphy.search(query, stickers: stickerSearch, offset: offset);
+      if (mounted && request == giphyRequest) {
+        setState(() {
+          giphyQuery = query;
+          results = more ? [...results, ...page.items] : page.items;
+          giphyOffset = page.nextOffset ?? 0;
+          giphyHasMore = page.nextOffset != null;
+        });
+      }
+    } catch (e) { if (mounted && request == giphyRequest) setState(() => error = '$e'); }
+    finally { if (mounted && request == giphyRequest) setState(() => busy = false); }
   }
 
   Future<void> _useGiphy(GiphyResult item) async {
@@ -362,7 +399,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
       setState(() => busy = true);
       final bytes = await giphy.fetchForShare(item);
       await actions.copyBytes(bytes, 'gif');
-      _showError('GIF copied to clipboard');
+      await _afterCopy();
     } catch (e) { _showError('Could not copy GIF: $e'); }
     finally { if (mounted) setState(() => busy = false); }
   }
@@ -395,7 +432,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
       body: picker ? _pickerView() : Row(children: [
         if (wide) SizedBox(width: 220, child: _sidebar()),
         Expanded(child: Column(children: [
-          if (!picker) Padding(padding: const EdgeInsets.fromLTRB(16, 8, 16, 4), child: SegmentedButton<bool>(segments: const [ButtonSegment(value: false, label: Text('Library'), icon: Icon(Icons.collections_outlined)), ButtonSegment(value: true, label: Text('GIPHY'), icon: Icon(Icons.search))], selected: {giphyTab}, onSelectionChanged: (v) => setState(() => giphyTab = v.first))),
+          if (!picker) Padding(padding: const EdgeInsets.fromLTRB(16, 8, 16, 4), child: SegmentedButton<bool>(segments: const [ButtonSegment(value: false, label: Text('Library'), icon: Icon(Icons.collections_outlined)), ButtonSegment(value: true, label: Text('GIPHY'), icon: Icon(Icons.search))], selected: {giphyTab}, onSelectionChanged: (v) => _switchTab(v.first))),
           if (giphyTab && !picker) Expanded(child: _giphyView()) else Expanded(child: _libraryView(wide)),
         ])),
       ]),
@@ -414,6 +451,12 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
           IconButton(tooltip: 'Open library', icon: const Icon(Icons.open_in_full, size: 18), onPressed: _openLibrary),
           IconButton(tooltip: 'Close popup', icon: const Icon(Icons.close, size: 18), onPressed: _dismissPicker),
         ])),
+        Padding(padding: const EdgeInsets.fromLTRB(14, 4, 14, 10), child: Row(children: [
+          ChoiceChip(label: const Text('Your library'), avatar: const Icon(Icons.collections_outlined, size: 16), selected: !giphyTab, onSelected: (_) => _switchTab(false)),
+          const SizedBox(width: 8),
+          ChoiceChip(label: const Text('GIPHY'), avatar: const Icon(Icons.search, size: 16), selected: giphyTab, onSelected: (_) => _switchTab(true)),
+        ])),
+        if (giphyTab) Expanded(child: _giphyView(compact: true)) else ...[
         Padding(padding: const EdgeInsets.fromLTRB(14, 2, 14, 10), child: TextField(
           focusNode: searchFocus,
           controller: searchController,
@@ -439,8 +482,9 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
               itemCount: items.length,
               itemBuilder: (context, index) => _itemCard(items[index], selected: index == selectedIndex),
             )),
+        ],
         const Divider(height: 1),
-        const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: Text('Type to search   ·   Arrow keys to move   ·   Enter to paste   ·   Esc to close', style: TextStyle(fontSize: 11, color: Colors.white54))),
+        Padding(padding: const EdgeInsets.symmetric(vertical: 8), child: Text(giphyTab ? 'Search GIPHY   ·   Arrow keys to move   ·   Enter to paste   ·   Esc to close' : 'Type to search   ·   Arrow keys to move   ·   Enter to paste   ·   Esc to close', style: const TextStyle(fontSize: 11, color: Colors.white54))),
       ]),
     );
   }
@@ -495,15 +539,53 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
     ]),
   ));
 
-  Widget _giphyView() => Column(children: [
-    Padding(padding: const EdgeInsets.all(16), child: Row(children: [Expanded(child: TextField(controller: giphyController, onSubmitted: (_) => _searchGiphy(), decoration: InputDecoration(prefixIcon: const Icon(Icons.search), hintText: 'Search GIFs and stickers', border: OutlineInputBorder(borderRadius: BorderRadius.circular(14))))), const SizedBox(width: 8), FilledButton(onPressed: busy || !giphy.configured ? null : _searchGiphy, child: const Text('Search'))])),
-    Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: Row(children: [ChoiceChip(label: const Text('GIFs'), selected: !stickerSearch, onSelected: (_) => setState(() => stickerSearch = false)), const SizedBox(width: 8), ChoiceChip(label: const Text('Stickers'), selected: stickerSearch, onSelected: (_) => setState(() => stickerSearch = true)), const Spacer(), const Text('Powered by GIPHY', style: TextStyle(fontSize: 12))])),
-    if (busy) const LinearProgressIndicator(),
-    if (error != null) Padding(padding: const EdgeInsets.all(16), child: Text(error!, style: const TextStyle(color: Colors.redAccent))),
-    Expanded(child: !giphy.configured ? const Center(child: Text('Add a GIPHY API key to enable search. See README.md.')) : results.isEmpty ? const Center(child: Text('Search GIPHY to find a GIF or sticker')) : GridView.builder(
-      padding: const EdgeInsets.all(16), gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(maxCrossAxisExtent: 180, childAspectRatio: 1, crossAxisSpacing: 12, mainAxisSpacing: 12), itemCount: results.length,
-      itemBuilder: (context, index) { final item = results[index]; return Card(clipBehavior: Clip.antiAlias, child: InkWell(onTap: busy ? null : () => _useGiphy(item), child: Image.network(item.previewUrl, fit: BoxFit.cover, errorBuilder: (_, _, _) => const Icon(Icons.broken_image_outlined)))); },
-    )),
+  Widget _giphyView({bool compact = false}) => Column(children: [
+    Padding(padding: EdgeInsets.fromLTRB(compact ? 14 : 16, 0, compact ? 14 : 16, 10), child: Row(children: [
+      Expanded(child: TextField(
+        focusNode: giphyFocus,
+        controller: giphyController,
+        textInputAction: TextInputAction.search,
+        onChanged: (_) => giphyNavigating = false,
+        onSubmitted: (_) => _searchGiphy(),
+        decoration: InputDecoration(prefixIcon: const Icon(Icons.search), hintText: 'Search GIPHY', isDense: compact, border: OutlineInputBorder(borderRadius: BorderRadius.circular(14))),
+      )),
+      const SizedBox(width: 8),
+      FilledButton(onPressed: busy || !giphy.configured ? null : () => _searchGiphy(), child: const Text('Search')),
+    ])),
+    Padding(padding: EdgeInsets.symmetric(horizontal: compact ? 14 : 16), child: Row(children: [
+      ChoiceChip(label: const Text('GIFs'), selected: !stickerSearch, onSelected: busy ? null : (_) { setState(() => stickerSearch = false); if (giphyController.text.trim().isNotEmpty) _searchGiphy(); }),
+      const SizedBox(width: 8),
+      ChoiceChip(label: const Text('Stickers'), selected: stickerSearch, onSelected: busy ? null : (_) { setState(() => stickerSearch = true); if (giphyController.text.trim().isNotEmpty) _searchGiphy(); }),
+      const Spacer(),
+      const Text('Powered by GIPHY', style: TextStyle(fontSize: 12, color: Colors.white70)),
+    ])),
+    const SizedBox(height: 8),
+    if (busy) const LinearProgressIndicator(minHeight: 2),
+    if (error != null) Padding(padding: const EdgeInsets.all(12), child: Text(error!, style: const TextStyle(color: Colors.redAccent))),
+    Expanded(child: !giphy.configured
+      ? const Center(child: Padding(padding: EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.key_outlined, size: 42, color: Colors.white54), SizedBox(height: 12), Text('Add a GIPHY API key to search', style: TextStyle(fontSize: 16)), SizedBox(height: 6), Text('See README.md for setup', style: TextStyle(color: Colors.white60))])))
+      : results.isEmpty
+        ? Center(child: Text(busy ? 'Searching GIPHY…' : giphyQuery.isEmpty ? 'Search for a reaction or sticker' : 'No results found', style: const TextStyle(color: Colors.white60)))
+        : GridView.builder(
+            padding: EdgeInsets.fromLTRB(compact ? 14 : 16, 4, compact ? 14 : 16, 12),
+            gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(maxCrossAxisExtent: compact ? 145 : 180, childAspectRatio: 0.94, crossAxisSpacing: 10, mainAxisSpacing: 10),
+            itemCount: results.length,
+            itemBuilder: (context, index) {
+              final item = results[index];
+              final selected = compact && index == selectedIndex;
+              return Card(
+                key: compact ? GlobalObjectKey('giphy-${item.id}') : null,
+                clipBehavior: Clip.antiAlias,
+                margin: EdgeInsets.zero,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: selected ? const Color(0xFFBDA7FF) : Colors.transparent, width: selected ? 2 : 0)),
+                child: InkWell(onTap: busy ? null : () => _useGiphy(item), child: Column(children: [
+                  Expanded(child: Image.network(item.previewUrl, fit: BoxFit.cover, width: double.infinity, errorBuilder: (_, _, _) => const Center(child: Icon(Icons.broken_image_outlined)))),
+                  Padding(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5), child: Text(item.title.isEmpty ? 'GIPHY' : item.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11))),
+                ])),
+              );
+            },
+          )),
+    if (giphyHasMore && results.isNotEmpty) Padding(padding: const EdgeInsets.only(bottom: 8), child: TextButton.icon(onPressed: busy ? null : () => _searchGiphy(more: true), icon: const Icon(Icons.expand_more), label: const Text('More results'))),
   ]);
 }
 
