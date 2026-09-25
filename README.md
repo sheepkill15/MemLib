@@ -31,7 +31,7 @@ flutter run -d windows --dart-define=GIPHY_WINDOWS_KEY=YOUR_KEY
 flutter run -d android --dart-define=GIPHY_ANDROID_KEY=YOUR_KEY
 ```
 
-GIPHY results are displayed in their own view with attribution, including inside the Windows quick picker. Search is submitted explicitly to conserve API calls, and more results can be loaded on demand. Choosing a result copies it and, when opened from another app with the quick shortcut, attempts to paste it into the previous input. The app does not store GIPHY media in the library. GIPHY beta keys currently allow 100 API calls per hour. Review their current API terms before release.
+GIPHY results are displayed in their own view with attribution, including inside the Windows quick picker. Search is submitted explicitly to conserve API calls, and more results can be loaded on demand. Choosing a result copies it and, when opened from another app with the quick shortcut, attempts to paste it into the previous input. The app sends GIPHY's view, click, and send analytics events; it does not store GIPHY media in the library. GIPHY beta keys currently allow 100 API calls per hour. Review their current API terms before release.
 
 ## Next milestones
 

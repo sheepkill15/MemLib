@@ -96,6 +96,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
   int selectedIndex = 0;
   String? error;
   List<GiphyResult> results = [];
+  final seenGiphy = <String>{};
   late HotKey hotkey;
   WindowsTray? windowsTray;
 
@@ -416,7 +417,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
     if (query.isEmpty || (more && !giphyHasMore)) return;
     final offset = more ? giphyOffset : 0;
     final request = ++giphyRequest;
-    setState(() { busy = true; error = null; if (!more) { results = []; selectedIndex = 0; giphyHasMore = false; giphyNavigating = false; } });
+    setState(() { busy = true; error = null; if (!more) { results = []; seenGiphy.clear(); selectedIndex = 0; giphyHasMore = false; giphyNavigating = false; } });
     try {
       final page = await giphy.search(query, stickers: stickerSearch, offset: offset);
       if (mounted && request == giphyRequest) {
@@ -434,9 +435,11 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
   Future<void> _useGiphy(GiphyResult item) async {
     try {
       setState(() => busy = true);
+      unawaited(giphy.track(item, GiphyAction.click));
       final bytes = await giphy.fetchForShare(item);
       await actions.copyBytes(bytes, 'gif');
       await _afterCopy();
+      unawaited(giphy.track(item, GiphyAction.send));
     } catch (e) { _showError('Could not copy GIF: $e'); }
     finally { if (mounted) setState(() => busy = false); }
   }
@@ -660,7 +663,10 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
                 margin: EdgeInsets.zero,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: selected ? const Color(0xFFBDA7FF) : Colors.transparent, width: selected ? 2 : 0)),
                 child: InkWell(onTap: busy ? null : () => _useGiphy(item), child: Column(children: [
-                  Expanded(child: Image.network(item.previewUrl, fit: BoxFit.cover, width: double.infinity, errorBuilder: (_, _, _) => const Center(child: Icon(Icons.broken_image_outlined)))),
+                  Expanded(child: Image.network(item.previewUrl, fit: BoxFit.cover, width: double.infinity, frameBuilder: (context, child, frame, loadedSynchronously) {
+                    if ((frame != null || loadedSynchronously) && seenGiphy.add(item.id)) unawaited(giphy.track(item, GiphyAction.load));
+                    return child;
+                  }, errorBuilder: (_, _, _) => const Center(child: Icon(Icons.broken_image_outlined)))),
                   Padding(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5), child: Text(item.title.isEmpty ? 'GIPHY' : item.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11))),
                 ])),
               );
