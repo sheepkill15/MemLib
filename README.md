@@ -2,6 +2,8 @@
 
 A sticker and GIF library for Windows and Android. The library editor handles importing, folders, favourites and search. On Windows, **Ctrl+Alt+V** opens a frameless popup; type to search, use arrow keys to move, press Enter to paste, or Escape to dismiss. Selecting an item attempts to restore the previously focused input and paste into it. Clicking elsewhere closes the popup. Android currently provides the library and clipboard copy; a keyboard/IME is the next platform milestone.
 
+When the Windows window is hidden, use the Memlib tray icon to reopen the library or launch the picker. The tray menu also has an Exit action.
+
 ## Run locally
 
 1. Install Flutter and platform toolchains.

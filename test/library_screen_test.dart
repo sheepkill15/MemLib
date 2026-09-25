@@ -43,7 +43,7 @@ void main() {
   testWidgets('folder sidebar and name dialog dispose cleanly', (tester) async {
     final store = LibraryStore();
     store.folders.add(LibraryFolder(id: 'folder-1', name: 'Reactions'));
-    await tester.pumpWidget(MemlibApp(store: store));
+    await tester.pumpWidget(MemlibApp(store: store, enableTray: false));
     await tester.pumpAndSettle();
     expect(find.text('Reactions'), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -58,7 +58,7 @@ void main() {
 
   testWidgets('Windows quick picker opens without chrome and closes with Escape', (tester) async {
     final store = LibraryStore();
-    await tester.pumpWidget(MemlibApp(store: store));
+    await tester.pumpWidget(MemlibApp(store: store, enableTray: false));
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Quick picker · Ctrl+Alt+V'));
     await tester.pumpAndSettle();

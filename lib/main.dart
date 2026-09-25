@@ -12,6 +12,7 @@ import 'giphy_service.dart';
 import 'library_store.dart';
 import 'media_actions.dart';
 import 'picker_navigation.dart';
+import 'windows_tray.dart';
 
 const supabaseUrl = String.fromEnvironment('SUPABASE_URL', defaultValue: String.fromEnvironment('NEXT_PUBLIC_SUPABASE_URL'));
 const supabasePublishableKey = String.fromEnvironment('SUPABASE_PUBLISHABLE_KEY', defaultValue: String.fromEnvironment('NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY'));
@@ -34,8 +35,9 @@ Future<void> main() async {
 }
 
 class MemlibApp extends StatelessWidget {
-  const MemlibApp({super.key, required this.store});
+  const MemlibApp({super.key, required this.store, this.enableTray = true});
   final LibraryStore store;
+  final bool enableTray;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -47,13 +49,14 @@ class MemlibApp extends StatelessWidget {
       scaffoldBackgroundColor: const Color(0xFF14121B),
       cardTheme: const CardThemeData(color: Color(0xFF24202E)),
     ),
-    home: LibraryScreen(store: store),
+    home: LibraryScreen(store: store, enableTray: enableTray),
   );
 }
 
 class LibraryScreen extends StatefulWidget {
-  const LibraryScreen({super.key, required this.store});
+  const LibraryScreen({super.key, required this.store, this.enableTray = true});
   final LibraryStore store;
+  final bool enableTray;
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -77,6 +80,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
   String? error;
   List<GiphyResult> results = [];
   late final HotKey hotkey;
+  WindowsTray? windowsTray;
 
   @override
   void initState() {
@@ -89,6 +93,25 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
       hotKeyManager.register(hotkey, keyDownHandler: (_) => _togglePicker(fromShortcut: true)).catchError((Object e) {
         if (mounted) setState(() => error = 'Global shortcut unavailable: $e');
       });
+      if (widget.enableTray) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          try {
+            windowsTray = WindowsTray();
+            final ready = windowsTray!.initialize(
+              openLibrary: () { if (mounted) unawaited(_openLibrary()); },
+              openPicker: () { if (mounted && !picker) unawaited(_togglePicker()); },
+              exitApp: () { if (mounted) unawaited(windowManager.close()); },
+            );
+            if (!ready) {
+              windowsTray = null;
+              debugPrint('Tray icon could not be shown');
+            }
+          } catch (e) {
+            debugPrint('Tray initialization failed: $e');
+          }
+        });
+      }
     }
   }
 
@@ -96,6 +119,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
   void dispose() {
     if (Platform.isWindows) {
       hotKeyManager.unregister(hotkey);
+      windowsTray?.dispose();
       HardwareKeyboard.instance.removeHandler(_handlePickerKey);
       windowManager.removeListener(this);
     }
@@ -199,7 +223,15 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
   }
 
   Future<void> _openLibrary() async {
+    for (var attempt = 0; windowTransition && attempt < 50; attempt++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
     if (windowTransition) return;
+    if (!picker) {
+      await windowManager.show();
+      await windowManager.focus();
+      return;
+    }
     windowTransition = true;
     try {
       await windowManager.hide();
