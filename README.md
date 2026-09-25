@@ -1,6 +1,6 @@
 # Memlib
 
-A sticker and GIF library for Windows and Android. The library editor handles importing, folders, favourites and search. On Windows, **Ctrl+Alt+V** opens a compact picker; choosing an item puts it on the clipboard and attempts to paste it into the previously focused app. Android currently provides the library and clipboard copy; a keyboard/IME is the next platform milestone.
+A sticker and GIF library for Windows and Android. The library editor handles importing, folders, favourites and search. On Windows, **Ctrl+Alt+V** opens a frameless popup; type to search, use arrow keys to move, press Enter to paste, or Escape to dismiss. Selecting an item attempts to restore the previously focused input and paste into it. Clicking elsewhere closes the popup. Android currently provides the library and clipboard copy; a keyboard/IME is the next platform milestone.
 
 ## Run locally
 
@@ -36,7 +36,7 @@ GIPHY results are displayed in their own view with attribution. The app fetches 
 1. Supabase sign-in, sync, and conflict handling with the local cache retained for fast picker opening.
 2. Android keyboard with rich GIF/sticker insertion, plus a share target for apps that do not accept rich keyboard content.
 3. Pinterest OAuth import after Pinterest approves API access. Map board/Pins to folders and preserve source attribution.
-4. Saved GIPHY references with live retrieval, subject to the provider terms, and optional other licensed providers.
+4. Optional live GIF search providers. KLIPY advertises unlimited production requests after approval, while its test key has 100 calls/hour; its terms prohibit storing its media in a user collection. Keep provider search separate from imported library items.
 5. Windows startup/tray integration, editable shortcut, and testing paste behavior across target apps.
 
 ## Current limits

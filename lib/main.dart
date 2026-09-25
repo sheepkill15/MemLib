@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
@@ -10,6 +11,7 @@ import 'package:window_manager/window_manager.dart';
 import 'giphy_service.dart';
 import 'library_store.dart';
 import 'media_actions.dart';
+import 'picker_navigation.dart';
 
 const supabaseUrl = String.fromEnvironment('SUPABASE_URL', defaultValue: String.fromEnvironment('NEXT_PUBLIC_SUPABASE_URL'));
 const supabasePublishableKey = String.fromEnvironment('SUPABASE_PUBLISHABLE_KEY', defaultValue: String.fromEnvironment('NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY'));
@@ -57,12 +59,11 @@ class LibraryScreen extends StatefulWidget {
   State<LibraryScreen> createState() => _LibraryScreenState();
 }
 
-class _LibraryScreenState extends State<LibraryScreen> {
+class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
   final actions = MediaActions();
   final giphy = GiphyService();
   final searchController = TextEditingController();
   final giphyController = TextEditingController();
-  final pickerFocus = FocusNode();
   final searchFocus = FocusNode();
   String? selectedFolder;
   bool favoritesOnly = false;
@@ -70,6 +71,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
   bool giphyTab = false;
   bool stickerSearch = false;
   bool busy = false;
+  bool windowTransition = false;
+  bool pasting = false;
+  int selectedIndex = 0;
   String? error;
   List<GiphyResult> results = [];
   late final HotKey hotkey;
@@ -79,6 +83,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
     super.initState();
     widget.store.addListener(_refresh);
     if (Platform.isWindows) {
+      windowManager.addListener(this);
+      HardwareKeyboard.instance.addHandler(_handlePickerKey);
       hotkey = HotKey(key: PhysicalKeyboardKey.keyV, modifiers: [HotKeyModifier.control, HotKeyModifier.alt]);
       hotKeyManager.register(hotkey, keyDownHandler: (_) => _togglePicker(fromShortcut: true)).catchError((Object e) {
         if (mounted) setState(() => error = 'Global shortcut unavailable: $e');
@@ -88,46 +94,132 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   @override
   void dispose() {
-    if (Platform.isWindows) hotKeyManager.unregister(hotkey);
+    if (Platform.isWindows) {
+      hotKeyManager.unregister(hotkey);
+      HardwareKeyboard.instance.removeHandler(_handlePickerKey);
+      windowManager.removeListener(this);
+    }
     widget.store.removeListener(_refresh);
     searchController.dispose();
     giphyController.dispose();
-    pickerFocus.dispose();
     searchFocus.dispose();
     super.dispose();
   }
 
   void _refresh() => setState(() {});
 
+  @override
+  void onWindowBlur() {
+    if (picker && !windowTransition && !pasting) unawaited(_dismissPicker());
+  }
+
+  bool _handlePickerKey(KeyEvent event) {
+    if (!picker || windowTransition || pasting || event is! KeyDownEvent) return false;
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.escape) {
+      unawaited(_dismissPicker());
+      return true;
+    }
+    final direction = switch (key) {
+      LogicalKeyboardKey.arrowLeft => PickerDirection.left,
+      LogicalKeyboardKey.arrowRight => PickerDirection.right,
+      LogicalKeyboardKey.arrowUp => PickerDirection.up,
+      LogicalKeyboardKey.arrowDown => PickerDirection.down,
+      _ => null,
+    };
+    if (direction != null) {
+      _selectPickerIndex(movePickerSelection(selectedIndex, visibleItems.length, 4, direction));
+      return true;
+    }
+    if (key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.numpadEnter) {
+      final items = visibleItems;
+      if (items.isNotEmpty) unawaited(_useItem(items[selectedIndex.clamp(0, items.length - 1)]));
+      return true;
+    }
+    return false;
+  }
+
+  void _selectPickerIndex(int index) {
+    setState(() => selectedIndex = index);
+    if (index < 0 || index >= visibleItems.length) return;
+    final id = visibleItems[index].id;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !picker) return;
+      final card = GlobalObjectKey('picker-$id').currentContext;
+      if (card != null) Scrollable.ensureVisible(card, duration: const Duration(milliseconds: 110), alignment: 0.2);
+    });
+  }
+
   Future<void> _togglePicker({bool fromShortcut = false}) async {
-    if (picker && fromShortcut) {
-      await _dismissPicker();
+    if (windowTransition) return;
+    if (picker) {
+      if (fromShortcut) {
+        await _dismissPicker();
+      } else {
+        await _openLibrary();
+      }
       return;
     }
-    if (!picker && fromShortcut) {
+    if (fromShortcut) {
       actions.rememberTarget();
-      if (actions.previousWindow == await windowManager.getId()) actions.previousWindow = null;
+      if (actions.previousWindow == await windowManager.getId()) actions.clearTarget();
+    } else {
+      actions.clearTarget();
     }
-    if (!fromShortcut) { actions.previousWindow = null; }
-    setState(() { picker = !picker; giphyTab = false; selectedFolder = null; favoritesOnly = false; searchController.clear(); });
-    if (Platform.isWindows) {
-      await windowManager.setSize(picker ? const Size(620, 560) : const Size(1050, 720));
+    windowTransition = true;
+    try {
+      await windowManager.hide();
+      searchController.clear();
+      setState(() { picker = true; giphyTab = false; selectedFolder = null; favoritesOnly = false; selectedIndex = 0; });
+      await windowManager.setAsFrameless();
+      await windowManager.setResizable(false);
+      await windowManager.setSkipTaskbar(true);
+      await windowManager.setAlwaysOnTop(true);
+      await windowManager.setSize(const Size(620, 540));
       await windowManager.center();
-      await windowManager.setAlwaysOnTop(picker);
       await windowManager.show();
       await windowManager.focus();
-      if (picker) searchFocus.requestFocus();
+      WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted && picker) searchFocus.requestFocus(); });
+    } finally {
+      windowTransition = false;
     }
   }
 
   Future<void> _dismissPicker() async {
-    if (!picker) return;
-    setState(() => picker = false);
-    actions.previousWindow = null;
-    if (Platform.isWindows) {
-      await windowManager.setAlwaysOnTop(false);
+    if (!picker || windowTransition) return;
+    windowTransition = true;
+    try {
       await windowManager.hide();
+      setState(() => picker = false);
+      actions.clearTarget();
+      await _restoreLibraryWindow();
+    } finally {
+      windowTransition = false;
     }
+  }
+
+  Future<void> _openLibrary() async {
+    if (windowTransition) return;
+    windowTransition = true;
+    try {
+      await windowManager.hide();
+      setState(() => picker = false);
+      actions.clearTarget();
+      await _restoreLibraryWindow();
+      await windowManager.setSize(const Size(1050, 720));
+      await windowManager.center();
+      await windowManager.show();
+      await windowManager.focus();
+    } finally {
+      windowTransition = false;
+    }
+  }
+
+  Future<void> _restoreLibraryWindow() async {
+    await windowManager.setAlwaysOnTop(false);
+    await windowManager.setSkipTaskbar(false);
+    await windowManager.setTitleBarStyle(TitleBarStyle.normal);
+    await windowManager.setResizable(true);
   }
 
   Future<void> _import() async {
@@ -154,17 +246,23 @@ class _LibraryScreenState extends State<LibraryScreen> {
       await widget.store.markUsed(item);
       if (picker && Platform.isWindows) {
         if (actions.previousWindow != null) {
-          final pasted = await actions.pasteIntoPreviousWindow();
-          if (pasted) {
-            setState(() => picker = false);
-            actions.previousWindow = null;
-            await windowManager.setAlwaysOnTop(false);
-          } else {
-            await windowManager.show();
-            await windowManager.focus();
-            _showError('Copied. Automatic paste did not work; press Ctrl+V in the target app.');
+          pasting = true;
+          try {
+            final pasted = await actions.pasteIntoPreviousWindow();
+            if (pasted) {
+              setState(() => picker = false);
+              actions.clearTarget();
+              await _restoreLibraryWindow();
+            } else {
+              await windowManager.show();
+              await windowManager.focus();
+              _showError('Copied. Automatic paste did not work; press Ctrl+V in the target app.');
+            }
+          } finally {
+            pasting = false;
           }
         } else {
+          await _openLibrary();
           _showError('Copied to clipboard');
         }
       } else {
@@ -210,26 +308,63 @@ class _LibraryScreenState extends State<LibraryScreen> {
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width > 720 && !picker;
     return Scaffold(
-      appBar: AppBar(
+      appBar: picker ? null : AppBar(
         title: Text(picker ? 'Quick pick' : 'Memlib'),
         actions: [
           if (Platform.isWindows) IconButton(tooltip: picker ? 'Open library' : 'Quick picker · Ctrl+Alt+V', icon: Icon(picker ? Icons.open_in_full : Icons.bolt), onPressed: () => _togglePicker()),
           if (!picker) IconButton(tooltip: 'Import files', icon: const Icon(Icons.add_photo_alternate_outlined), onPressed: _import),
         ],
       ),
-      body: Focus(focusNode: pickerFocus, onKeyEvent: (node, event) {
-        if (picker && event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.escape) {
-          _dismissPicker();
-          return KeyEventResult.handled;
-        }
-        return KeyEventResult.ignored;
-      }, child: Row(children: [
+      body: picker ? _pickerView() : Row(children: [
         if (wide) SizedBox(width: 220, child: _sidebar()),
         Expanded(child: Column(children: [
           if (!picker) Padding(padding: const EdgeInsets.fromLTRB(16, 8, 16, 4), child: SegmentedButton<bool>(segments: const [ButtonSegment(value: false, label: Text('Library'), icon: Icon(Icons.collections_outlined)), ButtonSegment(value: true, label: Text('GIPHY'), icon: Icon(Icons.search))], selected: {giphyTab}, onSelectionChanged: (v) => setState(() => giphyTab = v.first))),
           if (giphyTab && !picker) Expanded(child: _giphyView()) else Expanded(child: _libraryView(wide)),
         ])),
-      ])),
+      ]),
+    );
+  }
+
+  Widget _pickerView() {
+    final items = visibleItems;
+    return DecoratedBox(
+      decoration: BoxDecoration(color: const Color(0xFF1A1623), border: Border.all(color: const Color(0xFF514462))),
+      child: Column(children: [
+        Padding(padding: const EdgeInsets.fromLTRB(16, 8, 8, 2), child: Row(children: [
+          const Icon(Icons.bolt, color: Color(0xFFBDA7FF), size: 20),
+          const SizedBox(width: 8),
+          const Expanded(child: Text('Memlib', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700))),
+          IconButton(tooltip: 'Open library', icon: const Icon(Icons.open_in_full, size: 18), onPressed: _openLibrary),
+          IconButton(tooltip: 'Close popup', icon: const Icon(Icons.close, size: 18), onPressed: _dismissPicker),
+        ])),
+        Padding(padding: const EdgeInsets.fromLTRB(14, 2, 14, 10), child: TextField(
+          focusNode: searchFocus,
+          controller: searchController,
+          onChanged: (_) => setState(() => selectedIndex = 0),
+          decoration: InputDecoration(
+            prefixIcon: const Icon(Icons.search), hintText: 'Find a sticker or GIF',
+            isDense: true, filled: true, fillColor: const Color(0xFF2A2435),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+          ),
+        )),
+        SizedBox(height: 42, child: ListView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 14), children: [
+          ChoiceChip(label: const Text('All'), selected: selectedFolder == null && !favoritesOnly, onSelected: (_) => setState(() { selectedFolder = null; favoritesOnly = false; selectedIndex = 0; })),
+          const SizedBox(width: 7),
+          ChoiceChip(label: const Text('★ Favourites'), selected: favoritesOnly, onSelected: (_) => setState(() { selectedFolder = null; favoritesOnly = true; selectedIndex = 0; })),
+          ...widget.store.folders.map((folder) => Padding(padding: const EdgeInsets.only(left: 7), child: ChoiceChip(label: Text(folder.name), selected: selectedFolder == folder.id, onSelected: (_) => setState(() { selectedFolder = folder.id; favoritesOnly = false; selectedIndex = 0; })))),
+        ])),
+        const SizedBox(height: 8),
+        Expanded(child: items.isEmpty
+          ? const Center(child: Text('No matching items', style: TextStyle(color: Colors.white60)))
+          : GridView.builder(
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 4, childAspectRatio: 1.0, crossAxisSpacing: 10, mainAxisSpacing: 10),
+              itemCount: items.length,
+              itemBuilder: (context, index) => _itemCard(items[index], selected: index == selectedIndex),
+            )),
+        const Divider(height: 1),
+        const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: Text('Type to search   ·   Arrow keys to move   ·   Enter to paste   ·   Esc to close', style: TextStyle(fontSize: 11, color: Colors.white54))),
+      ]),
     );
   }
 
@@ -268,7 +403,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     if (picker && Platform.isWindows) const Padding(padding: EdgeInsets.all(8), child: Text('Ctrl+Alt+V · Tap an item to paste into the previous app', style: TextStyle(color: Colors.white54, fontSize: 12))),
   ]);
 
-  Widget _itemCard(LibraryItem item) => Card(clipBehavior: Clip.antiAlias, margin: EdgeInsets.zero, child: InkWell(
+  Widget _itemCard(LibraryItem item, {bool selected = false}) => Card(key: picker ? GlobalObjectKey('picker-${item.id}') : null, clipBehavior: Clip.antiAlias, margin: EdgeInsets.zero, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: selected ? const Color(0xFFBDA7FF) : Colors.transparent, width: selected ? 2 : 0)), child: InkWell(
     onTap: () => _useItem(item),
     child: Column(children: [
       Expanded(child: Stack(fit: StackFit.expand, children: [
