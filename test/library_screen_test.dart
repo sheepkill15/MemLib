@@ -60,7 +60,7 @@ void main() {
     final store = LibraryStore();
     await tester.pumpWidget(MemlibApp(store: store, enableTray: false));
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Quick picker · Ctrl+Alt+V'));
+    await tester.tap(find.byIcon(Icons.bolt));
     await tester.pumpAndSettle();
     expect(find.text('Find a sticker or GIF'), findsOneWidget);
     expect(find.text('Type to search   ·   Arrow keys to move   ·   Enter to paste   ·   Esc to close'), findsOneWidget);

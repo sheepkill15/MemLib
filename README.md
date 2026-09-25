@@ -1,6 +1,6 @@
 # Memlib
 
-A sticker and GIF library for Windows and Android. The library editor handles importing, folders, favourites and search. On Windows, **Ctrl+Alt+V** opens a frameless popup; type to search, use arrow keys to move, press Enter to paste, or Escape to dismiss. Selecting an item attempts to restore the previously focused input and paste into it. Clicking elsewhere closes the popup. Android currently provides the library and clipboard copy; a keyboard/IME is the next platform milestone.
+A sticker and GIF library for Windows and Android. The library editor handles importing, folders, favourites and search. On Windows, **Ctrl+Alt+V** opens a frameless popup by default; type to search, use arrow keys to move, press Enter to paste, or Escape to dismiss. Selecting an item attempts to restore the previously focused input and paste into it. Clicking elsewhere closes the popup. Use the keyboard button in the library toolbar to change the global shortcut. Android currently provides the library and clipboard copy; a keyboard/IME is the next platform milestone.
 
 When the Windows window is hidden, use the Memlib tray icon to reopen the library or launch the picker. The tray menu also has an Exit action.
 
@@ -38,8 +38,8 @@ GIPHY results are displayed in their own view with attribution. The app fetches 
 1. Supabase sign-in, sync, and conflict handling with the local cache retained for fast picker opening.
 2. Android keyboard with rich GIF/sticker insertion, plus a share target for apps that do not accept rich keyboard content.
 3. Pinterest OAuth import after Pinterest approves API access. Map board/Pins to folders and preserve source attribution.
-4. Optional live GIF search providers. KLIPY advertises unlimited production requests after approval, while its test key has 100 calls/hour; its terms prohibit storing its media in a user collection. Keep provider search separate from imported library items.
-5. Windows startup/tray integration, editable shortcut, and testing paste behavior across target apps.
+4. Optional live GIF search providers. [KLIPY](https://klipy.com/developers) advertises unlimited production requests after approval, while its test key has 100 calls/hour; [its API terms](https://klipy.com/support/api-terms) prohibit storing its media in a user collection. [gifs.chat](https://gifs.chat/docs) states a free limit of 120 requests/minute and 20,000/day, but currently lists only about 10,600 GIFs. [Its terms](https://gifs.chat/terms) permit building on the API but do not grant rights to reuse individual GIFs or re-serve the corpus. Keep provider search separate from imported library items, and review any provider before shipping an integration.
+5. Windows launch on sign-in and testing focus restoration and paste behavior across target apps.
 
 ## Current limits
 

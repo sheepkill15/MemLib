@@ -12,6 +12,7 @@ import 'giphy_service.dart';
 import 'library_store.dart';
 import 'media_actions.dart';
 import 'picker_navigation.dart';
+import 'shortcut_settings.dart';
 import 'windows_tray.dart';
 
 const supabaseUrl = String.fromEnvironment('SUPABASE_URL', defaultValue: String.fromEnvironment('NEXT_PUBLIC_SUPABASE_URL'));
@@ -31,13 +32,15 @@ Future<void> main() async {
   }
   final store = LibraryStore();
   await store.load();
-  runApp(MemlibApp(store: store));
+  final shortcut = Platform.isWindows ? await ShortcutSettings.load() : null;
+  runApp(MemlibApp(store: store, initialShortcut: shortcut));
 }
 
 class MemlibApp extends StatelessWidget {
-  const MemlibApp({super.key, required this.store, this.enableTray = true});
+  const MemlibApp({super.key, required this.store, this.enableTray = true, this.initialShortcut});
   final LibraryStore store;
   final bool enableTray;
+  final HotKey? initialShortcut;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -49,14 +52,15 @@ class MemlibApp extends StatelessWidget {
       scaffoldBackgroundColor: const Color(0xFF14121B),
       cardTheme: const CardThemeData(color: Color(0xFF24202E)),
     ),
-    home: LibraryScreen(store: store, enableTray: enableTray),
+    home: LibraryScreen(store: store, enableTray: enableTray, initialShortcut: initialShortcut),
   );
 }
 
 class LibraryScreen extends StatefulWidget {
-  const LibraryScreen({super.key, required this.store, this.enableTray = true});
+  const LibraryScreen({super.key, required this.store, this.enableTray = true, this.initialShortcut});
   final LibraryStore store;
   final bool enableTray;
+  final HotKey? initialShortcut;
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -79,7 +83,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
   int selectedIndex = 0;
   String? error;
   List<GiphyResult> results = [];
-  late final HotKey hotkey;
+  late HotKey hotkey;
   WindowsTray? windowsTray;
 
   @override
@@ -89,7 +93,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
     if (Platform.isWindows) {
       windowManager.addListener(this);
       HardwareKeyboard.instance.addHandler(_handlePickerKey);
-      hotkey = HotKey(key: PhysicalKeyboardKey.keyV, modifiers: [HotKeyModifier.control, HotKeyModifier.alt]);
+      hotkey = widget.initialShortcut ?? ShortcutSettings.defaultShortcut();
       hotKeyManager.register(hotkey, keyDownHandler: (_) => _togglePicker(fromShortcut: true)).catchError((Object e) {
         if (mounted) setState(() => error = 'Global shortcut unavailable: $e');
       });
@@ -254,6 +258,46 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
     await windowManager.setResizable(true);
   }
 
+  Future<void> _changeShortcut() async {
+    HotKey? recorded;
+    final candidate = await showDialog<HotKey>(context: context, builder: (context) => StatefulBuilder(
+      builder: (context, update) => AlertDialog(
+        title: const Text('Quick picker shortcut'),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Current: ${hotkey.debugName}'),
+          const SizedBox(height: 16),
+          const Text('Press a new key combination:'),
+          const SizedBox(height: 8),
+          HotKeyRecorder(onHotKeyRecorded: (value) => update(() => recorded = value)),
+          const SizedBox(height: 12),
+          const Text('Use Ctrl, Alt, or the Windows key with another key.', style: TextStyle(fontSize: 12)),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: recorded != null && ShortcutSettings.isUsable(recorded!)
+              ? () => Navigator.pop(context, recorded) : null,
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    ));
+    if (candidate == null || !mounted) return;
+    final sameKey = candidate.physicalKey == hotkey.physicalKey &&
+      (candidate.modifiers ?? []).toSet().containsAll(hotkey.modifiers ?? []) &&
+      (candidate.modifiers ?? []).length == (hotkey.modifiers ?? []).length;
+    if (sameKey) return;
+    try {
+      await hotKeyManager.register(candidate, keyDownHandler: (_) => _togglePicker(fromShortcut: true));
+      await ShortcutSettings.save(candidate);
+      await hotKeyManager.unregister(hotkey);
+      if (mounted) setState(() => hotkey = candidate);
+    } catch (e) {
+      await hotKeyManager.unregister(candidate).catchError((_) {});
+      _showError('Shortcut unavailable: $e');
+    }
+  }
+
   Future<void> _import() async {
     const images = XTypeGroup(label: 'Images', extensions: ['png', 'gif', 'jpg', 'jpeg', 'webp'], mimeTypes: ['image/png', 'image/gif', 'image/jpeg', 'image/webp']);
     final picked = await openFiles(acceptedTypeGroups: [images]);
@@ -343,7 +387,8 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
       appBar: picker ? null : AppBar(
         title: Text(picker ? 'Quick pick' : 'Memlib'),
         actions: [
-          if (Platform.isWindows) IconButton(tooltip: picker ? 'Open library' : 'Quick picker · Ctrl+Alt+V', icon: Icon(picker ? Icons.open_in_full : Icons.bolt), onPressed: () => _togglePicker()),
+          if (Platform.isWindows) IconButton(tooltip: picker ? 'Open library' : 'Quick picker · ${hotkey.debugName}', icon: Icon(picker ? Icons.open_in_full : Icons.bolt), onPressed: () => _togglePicker()),
+          if (Platform.isWindows && !picker) IconButton(tooltip: 'Change quick picker shortcut', icon: const Icon(Icons.keyboard_outlined), onPressed: _changeShortcut),
           if (!picker) IconButton(tooltip: 'Import files', icon: const Icon(Icons.add_photo_alternate_outlined), onPressed: _import),
         ],
       ),
