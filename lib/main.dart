@@ -62,6 +62,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
   final giphy = GiphyService();
   final searchController = TextEditingController();
   final giphyController = TextEditingController();
+  final pickerFocus = FocusNode();
+  final searchFocus = FocusNode();
   String? selectedFolder;
   bool favoritesOnly = false;
   bool picker = false;
@@ -90,20 +92,41 @@ class _LibraryScreenState extends State<LibraryScreen> {
     widget.store.removeListener(_refresh);
     searchController.dispose();
     giphyController.dispose();
+    pickerFocus.dispose();
+    searchFocus.dispose();
     super.dispose();
   }
 
   void _refresh() => setState(() {});
 
   Future<void> _togglePicker({bool fromShortcut = false}) async {
-    if (!picker) {
-      if (fromShortcut) { actions.rememberTarget(); } else { actions.previousWindow = null; }
+    if (picker && fromShortcut) {
+      await _dismissPicker();
+      return;
     }
+    if (!picker && fromShortcut) {
+      actions.rememberTarget();
+      if (actions.previousWindow == await windowManager.getId()) actions.previousWindow = null;
+    }
+    if (!fromShortcut) { actions.previousWindow = null; }
     setState(() { picker = !picker; giphyTab = false; selectedFolder = null; favoritesOnly = false; searchController.clear(); });
     if (Platform.isWindows) {
       await windowManager.setSize(picker ? const Size(620, 560) : const Size(1050, 720));
+      await windowManager.center();
+      await windowManager.setAlwaysOnTop(picker);
       await windowManager.show();
       await windowManager.focus();
+      if (picker) searchFocus.requestFocus();
+    }
+  }
+
+  Future<void> _dismissPicker() async {
+    if (!picker) return;
+    setState(() => picker = false);
+    actions.previousWindow = null;
+    if (Platform.isWindows) {
+      await windowManager.setAlwaysOnTop(false);
+      await windowManager.hide();
     }
   }
 
@@ -137,9 +160,20 @@ class _LibraryScreenState extends State<LibraryScreen> {
       await actions.copyFile(widget.store.fileFor(item));
       await widget.store.markUsed(item);
       if (picker && Platform.isWindows) {
-        final pasted = await actions.pasteIntoPreviousWindow();
-        if (!pasted) _showError('Copied. Press Ctrl+V in the target app.');
-        setState(() => picker = false);
+        if (actions.previousWindow != null) {
+          final pasted = await actions.pasteIntoPreviousWindow();
+          if (pasted) {
+            setState(() => picker = false);
+            actions.previousWindow = null;
+            await windowManager.setAlwaysOnTop(false);
+          } else {
+            await windowManager.show();
+            await windowManager.focus();
+            _showError('Copied. Automatic paste did not work; press Ctrl+V in the target app.');
+          }
+        } else {
+          _showError('Copied to clipboard');
+        }
       } else {
         _showError('Copied to clipboard');
       }
@@ -190,13 +224,19 @@ class _LibraryScreenState extends State<LibraryScreen> {
           if (!picker) IconButton(tooltip: 'Import files', icon: const Icon(Icons.add_photo_alternate_outlined), onPressed: _import),
         ],
       ),
-      body: Row(children: [
+      body: Focus(focusNode: pickerFocus, onKeyEvent: (node, event) {
+        if (picker && event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.escape) {
+          _dismissPicker();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      }, child: Row(children: [
         if (wide) SizedBox(width: 220, child: _sidebar()),
         Expanded(child: Column(children: [
           if (!picker) Padding(padding: const EdgeInsets.fromLTRB(16, 8, 16, 4), child: SegmentedButton<bool>(segments: const [ButtonSegment(value: false, label: Text('Library'), icon: Icon(Icons.collections_outlined)), ButtonSegment(value: true, label: Text('GIPHY'), icon: Icon(Icons.search))], selected: {giphyTab}, onSelectionChanged: (v) => setState(() => giphyTab = v.first))),
           if (giphyTab && !picker) Expanded(child: _giphyView()) else Expanded(child: _libraryView(wide)),
         ])),
-      ]),
+      ])),
     );
   }
 
@@ -225,7 +265,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
       ...widget.store.folders.map((folder) => Padding(padding: const EdgeInsets.only(left: 8), child: ChoiceChip(label: Text(folder.name), selected: selectedFolder == folder.id, onSelected: (_) => setState(() { selectedFolder = folder.id; favoritesOnly = false; })))),
       if (!picker) IconButton(tooltip: 'New folder', onPressed: () async { final name = await _askName('New folder'); if (name != null) await widget.store.addFolder(name); }, icon: const Icon(Icons.create_new_folder_outlined)),
     ])),
-    Padding(padding: const EdgeInsets.all(16), child: TextField(controller: searchController, onChanged: (_) => setState(() {}), decoration: InputDecoration(prefixIcon: const Icon(Icons.search), hintText: 'Search your library', border: OutlineInputBorder(borderRadius: BorderRadius.circular(14))))),
+    Padding(padding: const EdgeInsets.all(16), child: TextField(focusNode: searchFocus, controller: searchController, onChanged: (_) => setState(() {}), decoration: InputDecoration(prefixIcon: const Icon(Icons.search), hintText: 'Search your library', border: OutlineInputBorder(borderRadius: BorderRadius.circular(14))))),
     Expanded(child: visibleItems.isEmpty ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.collections_bookmark_outlined, size: 60), const SizedBox(height: 12), Text(widget.store.items.isEmpty ? 'Your collection starts here' : 'Nothing found'), const SizedBox(height: 12), if (!picker) FilledButton.icon(onPressed: _import, icon: const Icon(Icons.add), label: const Text('Import stickers or GIFs'))])) : GridView.builder(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
       gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(maxCrossAxisExtent: picker ? 140 : 180, childAspectRatio: 0.85, crossAxisSpacing: 12, mainAxisSpacing: 12),
