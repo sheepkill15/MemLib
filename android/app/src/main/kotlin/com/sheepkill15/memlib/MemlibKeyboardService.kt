@@ -26,6 +26,7 @@ import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputContentInfo
 import android.content.ClipDescription
 import android.widget.HorizontalScrollView
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -43,15 +44,16 @@ import java.util.concurrent.Executors
 
 /** A small native IME so the library remains available when the Flutter activity is closed. */
 class MemlibKeyboardService : InputMethodService() {
-    private data class Item(val id: String, val name: String, val filename: String, val folderId: String?, val favorite: Boolean, val uses: Int, val sourceType: String, val sourceId: String, val sourcePage: String?)
+    private data class Item(val id: String, val name: String, val filename: String, val folderId: String?, val favorite: Boolean, val uses: Int, val sourceType: String, val sourceId: String, val sourcePage: String?, val tags: List<String>)
     private data class Folder(val id: String, val name: String)
     private data class GiphyItem(val id: String, val title: String, val previewUrl: String, val gifUrl: String, val pageUrl: String,
         val onload: String?, val onclick: String?, val onsent: String?)
 
-    private val background = Color.rgb(24, 20, 33)
-    private val panel = Color.rgb(43, 37, 56)
+    private val background = Color.rgb(26, 22, 35)
+    private val panel = Color.rgb(42, 36, 53)
     private val accent = Color.rgb(189, 167, 255)
     private val muted = Color.rgb(184, 178, 196)
+    private val border = Color.rgb(81, 68, 98)
     private lateinit var rootView: LinearLayout
     private var libraryRoot: File? = null
     private var folders = emptyList<Folder>()
@@ -60,8 +62,13 @@ class MemlibKeyboardService : InputMethodService() {
     private var favorites = false
     private var search = ""
     private var searchMode = false
+    private var tagFilterMode = false
+    private val tagFilters = mutableSetOf<String>()
+    private val draftTagFilters = mutableSetOf<String>()
     private var symbols = false
     private var shifted = false
+    private var status = "Tap an item to send · hold to share"
+    private var statusView: TextView? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private val previewExecutor = Executors.newFixedThreadPool(3)
     private var previewGeneration = 0
@@ -101,6 +108,10 @@ class MemlibKeyboardService : InputMethodService() {
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         reloadLibrary()
+        status = "Tap an item to send · hold to share"
+        tagFilterMode = false
+        tagFilters.clear()
+        draftTagFilters.clear()
         val variation = (info?.inputType ?: 0) and InputType.TYPE_MASK_VARIATION
         val password = variation == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
             variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
@@ -119,9 +130,11 @@ class MemlibKeyboardService : InputMethodService() {
             val data = JSONObject(index.readText())
             folders = data.optJSONArray("folders").asObjects().map { Folder(it.getString("id"), it.optString("name")) }
             items = data.optJSONArray("items").asObjects().map {
-                Item(it.getString("id"), it.optString("name"), it.getString("filename"), it.optString("folderId").takeUnless(String::isEmpty), it.optBoolean("favorite"), it.optInt("useCount"), it.optString("sourceType"), it.optString("sourceId"), it.optString("sourcePage").takeUnless(String::isEmpty))
+                Item(it.getString("id"), it.optString("name"), it.getString("filename"), it.optString("folderId").takeUnless(String::isEmpty), it.optBoolean("favorite"), it.optInt("useCount"), it.optString("sourceType"), it.optString("sourceId"), it.optString("sourcePage").takeUnless(String::isEmpty), it.optJSONArray("tags").asStrings())
             }
             if (folderId != null && folders.none { it.id == folderId }) folderId = null
+            val available = items.flatMap { it.tags }.map(String::lowercase).toSet()
+            tagFilters.retainAll(available)
         } catch (_: Exception) {
             folders = emptyList()
             items = emptyList()
@@ -131,10 +144,14 @@ class MemlibKeyboardService : InputMethodService() {
     private fun JSONArray?.asObjects(): List<JSONObject> =
         if (this == null) emptyList() else (0 until length()).mapNotNull { optJSONObject(it) }
 
+    private fun JSONArray?.asStrings(): List<String> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
     private fun render() {
         if (!::rootView.isInitialized) return
         previewGeneration++
         rootView.removeAllViews()
+        statusView = null
         renderLibrary()
     }
 
@@ -143,12 +160,14 @@ class MemlibKeyboardService : InputMethodService() {
             .getString("giphy_key", "").orEmpty().isNotBlank()
         if (!hasGiphy) giphyMode = false
         val top = row()
-        top.addView(label("Memlib", 17, accent, true), LinearLayout.LayoutParams(0, dp(40), 1f))
-        top.addView(key("Manage", description = "Open Memlib library") { openLibrary() })
+        top.addView(label("✦", 20, accent, true))
+        top.addView(label("Memlib", 16, Color.WHITE, true), LinearLayout.LayoutParams(0, dp(42), 1f))
+        top.addView(key("↗", description = "Open Memlib library") { openLibrary() })
+        top.addView(key("×", description = "Hide keyboard") { requestHideSelf(0) })
         rootView.addView(top)
 
         val navigation = row()
-        navigation.addView(key("Library", selected = !giphyMode) {
+        navigation.addView(key("Your library", selected = !giphyMode) {
             if (giphyMode) {
                 giphyGeneration++
                 giphyBusy = false
@@ -157,40 +176,50 @@ class MemlibKeyboardService : InputMethodService() {
                 giphyMode = false
                 search = ""
                 searchMode = false
+                tagFilterMode = false
                 render()
             }
         })
         if (hasGiphy) navigation.addView(key("GIPHY", selected = giphyMode) {
-            if (!giphyMode) { giphyMode = true; search = ""; searchMode = false; render() }
+            if (!giphyMode) { giphyMode = true; search = ""; searchMode = false; tagFilterMode = false; render() }
         })
-        navigation.addView(View(this), LinearLayout.LayoutParams(0, dp(38), 1f))
-        navigation.addView(key(if (search.isEmpty()) "⌕ Search" else "⌕ ${search.take(12)}", selected = searchMode,
-            description = "Search ${if (giphyMode) "GIPHY" else "library"}") {
-            searchMode = !searchMode
+        if (!searchMode) rootView.addView(navigation)
+
+        val searchRow = row().apply { background = rounded(panel, 12) }
+        searchRow.addView(label("⌕", 22, accent))
+        val searchText = if (search.isNotEmpty()) search else if (giphyMode) "Search GIPHY" else "Search items and tags"
+        searchRow.addView(label(searchText, 14, if (search.isEmpty()) muted else Color.WHITE),
+            LinearLayout.LayoutParams(0, dp(44), 1f))
+        if (!giphyMode && !searchMode) searchRow.addView(key(if (tagFilters.isEmpty()) "Tags" else "Tags (${tagFilters.size})",
+            selected = tagFilterMode || tagFilters.isNotEmpty(), description = "Filter by tags") {
+            if (tagFilterMode) tagFilterMode = false else {
+                draftTagFilters.clear()
+                draftTagFilters.addAll(tagFilters)
+                tagFilterMode = true
+            }
             render()
         })
-        rootView.addView(navigation)
-
-        if (searchMode) {
-            val searchRow = row()
-            searchRow.addView(label(if (search.isEmpty()) "Type to search" else search, 14, Color.WHITE),
-                LinearLayout.LayoutParams(0, dp(36), 1f))
-            if (search.isNotEmpty()) searchRow.addView(key("Clear") { updateSearch("") })
-            searchRow.addView(key("Done") { searchMode = false; render() })
-            rootView.addView(searchRow)
+        if (search.isNotEmpty()) searchRow.addView(key("×", description = "Clear search") { updateSearch("") })
+        searchRow.setOnClickListener { view ->
+            view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+            if (!searchMode) { tagFilterMode = false; searchMode = true; render() }
         }
+        searchRow.isHapticFeedbackEnabled = true
+        rootView.addView(searchRow, LinearLayout.LayoutParams(-1, dp(46)).apply {
+            setMargins(dp(5), dp(4), dp(5), dp(6))
+        })
 
-        if (giphyMode) {
+        if (giphyMode && !searchMode) {
             val chips = row()
             chips.addView(key("GIFs", selected = !giphyStickers) { giphyStickers = false; if (search.isNotBlank()) searchGiphy(false) else render() })
             chips.addView(key("Stickers", selected = giphyStickers) { giphyStickers = true; if (search.isNotBlank()) searchGiphy(false) else render() })
             chips.addView(label("Powered by GIPHY", 11, muted), LinearLayout.LayoutParams(0, dp(38), 1f))
             rootView.addView(chips)
-        } else if (!searchMode) {
+        } else if (!searchMode && !tagFilterMode) {
             val folderScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
             val chips = row()
             chips.addView(key("All", selected = folderId == null && !favorites) { folderId = null; favorites = false; render() })
-            chips.addView(key("★", selected = favorites) { folderId = null; favorites = true; render() })
+            chips.addView(key("★ Favourites", selected = favorites) { folderId = null; favorites = true; render() })
             for (folder in folders) chips.addView(key(folder.name.take(18), selected = folderId == folder.id) {
                 folderId = folder.id; favorites = false; render()
             })
@@ -199,51 +228,119 @@ class MemlibKeyboardService : InputMethodService() {
         }
 
         val matching = items.asSequence()
-            .filter { (folderId == null || it.folderId == folderId) && (!favorites || it.favorite) && it.name.contains(search, ignoreCase = true) }
+            .filter { (folderId == null || it.folderId == folderId) && (!favorites || it.favorite) &&
+                tagFilters.all { selected -> it.tags.any { tag -> tag.equals(selected, ignoreCase = true) } } &&
+                (it.name.contains(search, ignoreCase = true) || it.tags.any { tag -> tag.contains(search, ignoreCase = true) }) }
             .sortedWith(compareByDescending<Item> { it.favorite }.thenByDescending { it.uses })
             .take(36).toList()
-        val scroller = ScrollView(this).apply { isFillViewport = true }
-        val grid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        if (giphyMode && giphyResults.isNotEmpty()) {
-            for (batch in giphyResults.chunked(3)) {
+        val scroller = ScrollView(this).apply { isFillViewport = true; isVerticalScrollBarEnabled = false }
+        val grid = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(4), 0, dp(4), dp(4))
+        }
+        val widthDp = resources.displayMetrics.widthPixels / resources.displayMetrics.density
+        val columns = if (widthDp >= 390) 4 else 3
+        val tileHeight = if (searchMode) dp(84) else minOf(dp(112), (resources.displayMetrics.widthPixels - dp(28)) / columns)
+        if (tagFilterMode) {
+            renderTagFilters(grid)
+        } else if (giphyMode && giphyResults.isNotEmpty()) {
+            for (batch in giphyResults.chunked(columns)) {
                 val line = row()
-                for (item in batch) line.addView(giphyTile(item), LinearLayout.LayoutParams(0, dp(if (searchMode) 84 else 102), 1f))
-                repeat(3 - batch.size) { line.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f)) }
+                for (item in batch) line.addView(giphyTile(item), LinearLayout.LayoutParams(0, tileHeight, 1f))
+                repeat(columns - batch.size) { line.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f)) }
                 grid.addView(line)
             }
             if (giphyHasMore) grid.addView(key("More GIPHY results") { searchGiphy(true) })
         } else if (giphyMode) {
-            grid.addView(label(if (giphyBusy) "Searching GIPHY…" else "Type a reaction and press Search. GIPHY results are sent without saving them.", 14, muted),
+            grid.addView(emptyMessage(if (giphyBusy) "Searching GIPHY…" else "Type a reaction and press Search"),
                 LinearLayout.LayoutParams(-1, dp(110)))
         } else if (matching.isEmpty()) {
-            grid.addView(label(if (items.isEmpty()) "Your library is empty. Open Memlib to import images or sign in." else "No matching stickers or GIFs", 14, muted),
+            grid.addView(emptyMessage(if (items.isEmpty()) "Your library is empty. Open Memlib to add items." else "No matching stickers or GIFs"),
                 LinearLayout.LayoutParams(-1, dp(110)))
         } else {
-            for (batch in matching.chunked(3)) {
+            for (batch in matching.chunked(columns)) {
                 val line = row()
-                for (item in batch) line.addView(tile(item), LinearLayout.LayoutParams(0, dp(if (searchMode) 84 else 102), 1f))
-                repeat(3 - batch.size) { line.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f)) }
+                for (item in batch) line.addView(tile(item), LinearLayout.LayoutParams(0, tileHeight, 1f))
+                repeat(columns - batch.size) { line.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f)) }
                 grid.addView(line)
             }
         }
         scroller.addView(grid)
-        val gridHeight = if (searchMode) dp(96) else minOf(dp(208), resources.displayMetrics.heightPixels / 3)
+        val gridHeight = if (searchMode) minOf(dp(94), resources.displayMetrics.heightPixels / 8)
+            else minOf(dp(208), resources.displayMetrics.heightPixels / 3)
         rootView.addView(scroller, LinearLayout.LayoutParams(-1, gridHeight))
         if (searchMode) renderSearchKeys()
+        if (!searchMode || giphyMode) {
+            rootView.addView(View(this).apply { setBackgroundColor(border) }, LinearLayout.LayoutParams(-1, dp(1)))
+        statusView = label(if (searchMode) "Powered by GIPHY" else if (tagFilterMode) "Items must match every selected tag" else status, 11, muted)
+        rootView.addView(statusView, LinearLayout.LayoutParams(-1, dp(if (searchMode) 20 else 25)))
+        }
+    }
+
+    private fun renderTagFilters(container: LinearLayout) {
+        val header = row()
+        header.addView(label("Filter by tags", 13, Color.WHITE, true), LinearLayout.LayoutParams(0, dp(42), 1f))
+        header.addView(key("Clear") { draftTagFilters.clear(); render() })
+        header.addView(key("Cancel") { tagFilterMode = false; render() })
+        header.addView(key("Apply", selected = true) {
+            tagFilters.clear()
+            tagFilters.addAll(draftTagFilters)
+            tagFilterMode = false
+            render()
+        })
+        container.addView(header)
+
+        val tags = items.flatMap { it.tags }.distinctBy { it.lowercase() }
+            .sortedWith(String.CASE_INSENSITIVE_ORDER)
+        if (tags.isEmpty()) {
+            container.addView(emptyMessage("No tags in your library"), LinearLayout.LayoutParams(-1, dp(100)))
+            return
+        }
+        for (batch in tags.chunked(2)) {
+            val line = row()
+            for (tag in batch) {
+                val normalized = tag.lowercase()
+                lateinit var chip: TextView
+                chip = key(tag, selected = normalized in draftTagFilters) {
+                    val selected = if (draftTagFilters.add(normalized)) true else {
+                        draftTagFilters.remove(normalized)
+                        false
+                    }
+                    chip.background = rounded(if (selected) accent else panel, 12)
+                    chip.setTextColor(if (selected) background else Color.WHITE)
+                    chip.contentDescription = "$tag ${if (selected) "selected" else "not selected"}"
+                }
+                chip.contentDescription = "$tag ${if (normalized in draftTagFilters) "selected" else "not selected"}"
+                line.addView(chip, LinearLayout.LayoutParams(0, dp(42), 1f).apply {
+                    setMargins(dp(2), dp(2), dp(2), dp(2))
+                })
+            }
+            if (batch.size == 1) line.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+            container.addView(line)
+        }
     }
 
     private fun tile(item: Item): View {
         val outer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            background = rounded(panel, 11)
-            setPadding(dp(3), dp(3), dp(3), dp(3))
+            background = rounded(panel, 12, border)
         }
         val file = File(File(libraryRoot, "media"), item.filename)
-        val preview = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_CENTER }
+        val imageArea = FrameLayout(this)
+        val preview = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setPadding(dp(7), dp(6), dp(7), dp(2))
+        }
         if (file.isFile) showPreview(preview, file)
-        outer.addView(preview, LinearLayout.LayoutParams(-1, 0, 1f))
-        outer.addView(label((if (item.favorite) "★ " else "") + item.name, 10, Color.WHITE), LinearLayout.LayoutParams(-1, dp(22)))
+        imageArea.addView(preview, FrameLayout.LayoutParams(-1, -1))
+        if (item.favorite) imageArea.addView(label("★", 17, accent), FrameLayout.LayoutParams(dp(28), dp(28), Gravity.TOP or Gravity.RIGHT))
+        if (item.sourceType == "giphy") imageArea.addView(label("GIPHY", 9, accent, true).apply {
+            background = rounded(this@MemlibKeyboardService.background, 5)
+        }, FrameLayout.LayoutParams(-2, dp(19), Gravity.BOTTOM or Gravity.LEFT).apply {
+            setMargins(dp(5), 0, 0, dp(2))
+        })
+        outer.addView(imageArea, LinearLayout.LayoutParams(-1, 0, 1f))
+        outer.addView(label(item.name, 11, Color.WHITE), LinearLayout.LayoutParams(-1, dp(24)))
         outer.contentDescription = "${item.name}. Tap to send, hold to share"
         outer.isHapticFeedbackEnabled = true
         outer.setOnClickListener { view -> view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY); sendFile(file, item.id) }
@@ -255,26 +352,27 @@ class MemlibKeyboardService : InputMethodService() {
     private fun giphyTile(item: GiphyItem): View {
         val outer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            background = rounded(panel, 11)
-            setPadding(dp(3), dp(3), dp(3), dp(3))
+            background = rounded(panel, 12, border)
         }
-        val preview = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_CENTER }
+        val imageArea = FrameLayout(this)
+        val preview = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setPadding(dp(7), dp(6), dp(7), dp(2))
+        }
         giphyPreviews[item.id]?.let { showRemotePreview(preview, it) } ?: loadGiphyPreview(item, preview)
-        outer.addView(preview, LinearLayout.LayoutParams(-1, 0, 1f))
-        val actions = row()
-        actions.addView(label(item.title.ifBlank { "GIPHY" }, 10, Color.WHITE), LinearLayout.LayoutParams(0, dp(34), 1f))
+        imageArea.addView(preview, FrameLayout.LayoutParams(-1, -1))
         if (getSharedPreferences("memlib_keyboard", MODE_PRIVATE).getBoolean("allow_giphy_saves", false)) {
             val saved = items.firstOrNull { (it.sourceType == "giphy" && it.sourceId == item.id) || it.sourcePage == item.pageUrl }
             val pendingSave = isGiphySaveQueued(item)
-            actions.addView(key(if (saved == null && !pendingSave) "+" else "✓") {
+            imageArea.addView(overlayAction(if (saved == null && !pendingSave) "+" else "✓", "Save to library") {
                 if (saved == null && !pendingSave) queueGiphySave(item, favorite = false, toggle = false)
-            })
-            actions.addView(key(if (expectedGiphyFavorite(item, saved?.favorite == true)) "★" else "☆") {
+            }, FrameLayout.LayoutParams(dp(30), dp(30), Gravity.TOP or Gravity.RIGHT).apply { setMargins(0, dp(4), dp(4), 0) })
+            imageArea.addView(overlayAction(if (expectedGiphyFavorite(item, saved?.favorite == true)) "★" else "☆", "Toggle favourite") {
                 queueGiphySave(item, favorite = !expectedGiphyFavorite(item, saved?.favorite == true), toggle = true)
-            })
+            }, FrameLayout.LayoutParams(dp(30), dp(30), Gravity.TOP or Gravity.LEFT).apply { setMargins(dp(4), dp(4), 0, 0) })
         }
-        outer.addView(actions, LinearLayout.LayoutParams(-1, dp(38)))
+        outer.addView(imageArea, LinearLayout.LayoutParams(-1, 0, 1f))
+        outer.addView(label(item.title.ifBlank { "GIPHY" }, 11, Color.WHITE), LinearLayout.LayoutParams(-1, dp(24)))
         outer.contentDescription = "${item.title.ifBlank { "GIPHY GIF" }}. Tap to send, hold to share"
         outer.isHapticFeedbackEnabled = true
         outer.setOnClickListener { view -> view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY); downloadGiphy(item, share = false) }
@@ -600,6 +698,8 @@ class MemlibKeyboardService : InputMethodService() {
     }
 
     private fun updateStatus(message: String) {
+        status = message
+        statusView?.text = message
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     }
 
@@ -621,10 +721,18 @@ class MemlibKeyboardService : InputMethodService() {
         setPadding(dp(7), 0, dp(7), 0)
     }
 
+    private fun emptyMessage(text: String) = label(text, 14, muted).apply {
+        gravity = Gravity.CENTER
+        maxLines = 2
+        setPadding(dp(20), 0, dp(20), 0)
+    }
+
     private fun key(text: String, selected: Boolean = false, description: String = text, action: () -> Unit) = TextView(this).apply {
         this.text = text
         contentDescription = description
         textSize = 13f
+        maxLines = 1
+        ellipsize = android.text.TextUtils.TruncateAt.END
         setTextColor(if (selected) this@MemlibKeyboardService.background else Color.WHITE)
         gravity = Gravity.CENTER
         background = rounded(if (selected) accent else panel, 12)
@@ -638,9 +746,24 @@ class MemlibKeyboardService : InputMethodService() {
         layoutParams = LinearLayout.LayoutParams(-2, dp(40)).apply { setMargins(margin, margin, margin, margin) }
     }
 
-    private fun rounded(color: Int, radius: Int) = GradientDrawable().apply {
+    private fun overlayAction(text: String, description: String, action: () -> Unit) = TextView(this).apply {
+        this.text = text
+        contentDescription = description
+        textSize = 17f
+        gravity = Gravity.CENTER
+        setTextColor(accent)
+        background = rounded(this@MemlibKeyboardService.background, 9)
+        isHapticFeedbackEnabled = true
+        setOnClickListener { view ->
+            view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+            action()
+        }
+    }
+
+    private fun rounded(color: Int, radius: Int, stroke: Int? = null) = GradientDrawable().apply {
         setColor(color)
         cornerRadius = dp(radius).toFloat()
+        if (stroke != null) setStroke(dp(1), stroke)
     }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
