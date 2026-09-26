@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:memlib/library_store.dart';
 
@@ -102,6 +103,48 @@ void main() {
       destination.id,
     );
   });
+
+  test(
+    'ZIP import preserves folders and ignores unsafe and non-media entries',
+    () async {
+      await store.addFolder('Collection');
+      final collection = store.folders.single;
+      await store.addFolder('Animals', parentId: collection.id);
+      final existingAnimals = store.folders.last;
+      final archive = Archive()
+        ..addFile(ArchiveFile.bytes('Animals/Cats/one.png', [1, 2, 3]))
+        ..addFile(ArchiveFile.bytes('Animals/Dogs/two.gif', [4, 5, 6]))
+        ..addFile(ArchiveFile.directory('Empty'))
+        ..addFile(ArchiveFile.bytes('../outside.png', [7]))
+        ..addFile(ArchiveFile.bytes('notes.txt', [8]));
+      final count = await store.importZipBytes(
+        ZipEncoder().encodeBytes(archive),
+        folderId: collection.id,
+      );
+      expect(count, 2);
+      expect(
+        store.folders.where((folder) => folder.name == 'Animals').single.id,
+        existingAnimals.id,
+      );
+      final cats = store.folders.singleWhere((folder) => folder.name == 'Cats');
+      final dogs = store.folders.singleWhere((folder) => folder.name == 'Dogs');
+      final empty = store.folders.singleWhere(
+        (folder) => folder.name == 'Empty',
+      );
+      expect(cats.parentId, existingAnimals.id);
+      expect(dogs.parentId, existingAnimals.id);
+      expect(empty.parentId, collection.id);
+      expect(
+        store.items.singleWhere((item) => item.name == 'one').folderId,
+        cats.id,
+      );
+      expect(
+        store.items.singleWhere((item) => item.name == 'two').folderId,
+        dogs.id,
+      );
+      expect(store.items.length, 2);
+    },
+  );
 
   test('bulk tags and folder moves persist for selected items', () async {
     final source = File('${sandbox.path}${Platform.pathSeparator}sample.png');

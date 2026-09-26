@@ -148,9 +148,10 @@ class LibraryScreen extends StatefulWidget {
 }
 
 class _LibraryDrag {
-  const _LibraryDrag.item(this.id) : folder = false;
-  const _LibraryDrag.folder(this.id) : folder = true;
+  const _LibraryDrag.items(this.itemIds) : id = '', folder = false;
+  const _LibraryDrag.folder(this.id) : itemIds = const [], folder = true;
   final String id;
+  final List<String> itemIds;
   final bool folder;
 }
 
@@ -693,17 +694,33 @@ class _LibraryScreenState extends State<LibraryScreen>
   }
 
   Future<void> _import() async {
-    const images = XTypeGroup(
-      label: 'Images',
-      extensions: ['png', 'gif', 'jpg', 'jpeg', 'webp'],
-      mimeTypes: ['image/png', 'image/gif', 'image/jpeg', 'image/webp'],
+    const imports = XTypeGroup(
+      label: 'Images and ZIP archives',
+      extensions: ['png', 'gif', 'jpg', 'jpeg', 'webp', 'zip'],
+      mimeTypes: [
+        'image/png',
+        'image/gif',
+        'image/jpeg',
+        'image/webp',
+        'application/zip',
+      ],
     );
-    final picked = await openFiles(acceptedTypeGroups: [images]);
+    final picked = await openFiles(acceptedTypeGroups: [imports]);
     if (Platform.isAndroid) {
       var added = 0;
       for (final file in picked) {
         try {
           final extension = file.name.split('.').last.toLowerCase();
+          if (extension == 'zip') {
+            if (await file.length() > 100 * 1024 * 1024) {
+              throw const FormatException('ZIP files must be under 100 MB');
+            }
+            added += await widget.store.importZipBytes(
+              await file.readAsBytes(),
+              folderId: selectedFolder,
+            );
+            continue;
+          }
           if (!{'png', 'gif', 'jpg', 'jpeg', 'webp'}.contains(extension)) {
             continue;
           }
@@ -734,18 +751,35 @@ class _LibraryScreenState extends State<LibraryScreen>
     final supported = paths
         .where(
           (path) => RegExp(
-            r'\.(png|gif|jpe?g|webp)$',
+            r'\.(png|gif|jpe?g|webp|zip)$',
             caseSensitive: false,
           ).hasMatch(path),
         )
         .toList();
     if (supported.isEmpty) {
-      _showError('Choose PNG, GIF, JPEG, or WebP files.');
+      _showError('Choose PNG, GIF, JPEG, WebP, or ZIP files.');
       return false;
     }
     try {
       final before = widget.store.items.length;
-      await widget.store.importFiles(supported, folderId: selectedFolder);
+      final images = supported
+          .where((path) => !path.toLowerCase().endsWith('.zip'))
+          .toList();
+      await widget.store.importFiles(images, folderId: selectedFolder);
+      for (final path in supported.where(
+        (path) => path.toLowerCase().endsWith('.zip'),
+      )) {
+        final file = File(path);
+        if (await file.length() > 100 * 1024 * 1024) {
+          throw FormatException(
+            '${file.uri.pathSegments.last} exceeds the 100 MB ZIP limit',
+          );
+        }
+        await widget.store.importZipBytes(
+          await file.readAsBytes(),
+          folderId: selectedFolder,
+        );
+      }
       final added = widget.store.items.length - before;
       _showError(
         added == 0
@@ -964,8 +998,9 @@ class _LibraryScreenState extends State<LibraryScreen>
           folder.parentId != target &&
           widget.store.canMoveFolder(folder, target);
     }
-    final item = widget.store.items.where((e) => e.id == data.id).firstOrNull;
-    return item != null && item.folderId != target;
+    return widget.store.items.any(
+      (item) => data.itemIds.contains(item.id) && item.folderId != target,
+    );
   }
 
   Future<void> _drop(_LibraryDrag data, String? target) async {
@@ -976,13 +1011,20 @@ class _LibraryScreenState extends State<LibraryScreen>
             .firstOrNull;
         if (folder == null) return;
         await widget.store.moveFolder(folder, target);
-        if (target != null) setState(() => expandedFolders.add(target));
       } else {
-        final item = widget.store.items
-            .where((e) => e.id == data.id)
-            .firstOrNull;
-        if (item == null) return;
-        await widget.store.updateItem(item, move: true, folderId: target);
+        final items = widget.store.items
+            .where((item) => data.itemIds.contains(item.id))
+            .toList();
+        if (items.isEmpty) return;
+        await widget.store.moveItems(items, target);
+      }
+      if (mounted) {
+        setState(() {
+          selectedItemIds.clear();
+          selectionAnchorId = null;
+          mobileSelecting = false;
+          if (target != null) expandedFolders.add(target);
+        });
       }
     } catch (e) {
       _showError('Could not move: $e');
@@ -1006,23 +1048,31 @@ class _LibraryScreenState extends State<LibraryScreen>
     ),
   );
 
-  Widget _drag(_LibraryDrag data, String label, IconData icon, Widget child) {
-    final feedback = Material(
-      color: const Color(0xFF382B56),
-      borderRadius: BorderRadius.circular(12),
-      elevation: 8,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 20),
-            const SizedBox(width: 8),
-            Text(label, style: const TextStyle(fontSize: 14)),
-          ],
-        ),
+  _LibraryDrag _dragDataForItem(LibraryItem item) => _LibraryDrag.items(
+    selectedItemIds.contains(item.id)
+        ? selectedItems.map((selected) => selected.id).toList()
+        : [item.id],
+  );
+
+  Widget _dragFeedback(String label, IconData icon) => Material(
+    color: const Color(0xFF382B56),
+    borderRadius: BorderRadius.circular(12),
+    elevation: 8,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 20),
+          const SizedBox(width: 8),
+          Text(label, style: const TextStyle(fontSize: 14)),
+        ],
       ),
-    );
+    ),
+  );
+
+  Widget _drag(_LibraryDrag data, String label, IconData icon, Widget child) {
+    final feedback = _dragFeedback(label, icon);
     if (Theme.of(context).platform == TargetPlatform.android) {
       if (!data.folder) return child;
       return LongPressDraggable<_LibraryDrag>(
@@ -2225,10 +2275,13 @@ class _LibraryScreenState extends State<LibraryScreen>
               ...foldersIn(null).map(
                 (folder) => Padding(
                   padding: const EdgeInsets.only(left: 8),
-                  child: ChoiceChip(
-                    label: Text(folder.name),
-                    selected: selectedFolder == folder.id,
-                    onSelected: (_) => _openFolder(folder.id),
+                  child: _dropOn(
+                    folder.id,
+                    ChoiceChip(
+                      label: Text(folder.name),
+                      selected: selectedFolder == folder.id,
+                      onSelected: (_) => _openFolder(folder.id),
+                    ),
                   ),
                 ),
               ),
@@ -2337,16 +2390,21 @@ class _LibraryScreenState extends State<LibraryScreen>
                   mainAxisSpacing: 12,
                 ),
                 itemCount: visibleFolders.length + visibleItems.length,
-                itemBuilder: (context, index) => index < visibleFolders.length
-                    ? _folderCard(visibleFolders[index])
-                    : _drag(
-                        _LibraryDrag.item(
-                          visibleItems[index - visibleFolders.length].id,
-                        ),
-                        visibleItems[index - visibleFolders.length].name,
-                        Icons.image_outlined,
-                        _itemCard(visibleItems[index - visibleFolders.length]),
-                      ),
+                itemBuilder: (context, index) {
+                  if (index < visibleFolders.length) {
+                    return _folderCard(visibleFolders[index]);
+                  }
+                  final item = visibleItems[index - visibleFolders.length];
+                  final drag = _dragDataForItem(item);
+                  return _drag(
+                    drag,
+                    drag.itemIds.length == 1
+                        ? item.name
+                        : '${drag.itemIds.length} items',
+                    Icons.image_outlined,
+                    _itemCard(item),
+                  );
+                },
               ),
       ),
       if (picker && Platform.isWindows)
@@ -2509,6 +2567,28 @@ class _LibraryScreenState extends State<LibraryScreen>
                           onChanged: (_) =>
                               _selectLibraryItem(item, checkbox: true),
                           visualDensity: VisualDensity.compact,
+                        ),
+                      ),
+                    ),
+                  if (!picker &&
+                      Theme.of(context).platform == TargetPlatform.android &&
+                      selectedItemIds.contains(item.id))
+                    Positioned(
+                      left: 4,
+                      bottom: 4,
+                      child: Tooltip(
+                        message: 'Drag selected items to a folder',
+                        child: Draggable<_LibraryDrag>(
+                          data: _dragDataForItem(item),
+                          feedback: _dragFeedback(
+                            '${selectedItemIds.length} ${selectedItemIds.length == 1 ? 'item' : 'items'}',
+                            Icons.drive_file_move_outline,
+                          ),
+                          childWhenDragging: const Icon(
+                            Icons.drag_indicator,
+                            size: 24,
+                          ),
+                          child: const Icon(Icons.drag_indicator, size: 24),
                         ),
                       ),
                     ),

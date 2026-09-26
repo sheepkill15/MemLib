@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -300,6 +301,88 @@ void main() {
     expect(tester.takeException(), isNull);
   }, skip: !Platform.isWindows);
 
+  testWidgets('dragging a selected item moves the whole selection', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final store = _MemoryStore();
+    store.folders.add(LibraryFolder(id: 'destination', name: 'Destination'));
+    final media = Directory.systemTemp.createTempSync('memlib-drag-media-');
+    store.media = media;
+    addTearDown(() => media.deleteSync(recursive: true));
+    File('${media.path}${Platform.pathSeparator}sample.png').writeAsBytesSync(
+      base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9hQ4sAAAAASUVORK5CYII=',
+      ),
+    );
+    for (var i = 0; i < 3; i++) {
+      store.items.add(
+        LibraryItem(
+          id: 'item$i',
+          name: 'Item $i',
+          filename: 'sample.png',
+          kind: 'sticker',
+        ),
+      );
+    }
+    await tester.pumpWidget(MemlibApp(store: store, enableTray: false));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('select-item0')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('select-item1')));
+    await tester.pumpAndSettle();
+    expect(find.text('2 selected'), findsOneWidget);
+    final source = tester.getCenter(
+      find.byKey(const ValueKey('item-card-item0')),
+    );
+    final target = tester.getCenter(
+      find.byKey(const ValueKey('sidebar-folder-destination')),
+    );
+    final gesture = await tester.startGesture(
+      source,
+      kind: PointerDeviceKind.mouse,
+    );
+    await gesture.moveBy(const Offset(-30, 0));
+    await tester.pump();
+    await gesture.moveBy(const Offset(-30, 0));
+    await tester.pump();
+    expect(find.text('2 items'), findsWidgets);
+    await gesture.moveTo(target);
+    await tester.pump();
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(store.items[0].folderId, 'destination');
+    expect(store.items[1].folderId, 'destination');
+    expect(store.items[2].folderId, isNull);
+    expect(find.text('2 selected'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('select-item2')));
+    await tester.pumpAndSettle();
+    final remaining = tester.getCenter(
+      find.byKey(const ValueKey('item-card-item2')),
+    );
+    final root = tester.getCenter(
+      find.widgetWithText(ListTile, 'Library root'),
+    );
+    final rejected = await tester.startGesture(
+      remaining,
+      kind: PointerDeviceKind.mouse,
+    );
+    await rejected.moveBy(const Offset(-30, 0));
+    await tester.pump();
+    await rejected.moveTo(root);
+    await tester.pump();
+    await rejected.up();
+    await tester.pumpAndSettle();
+    expect(store.items[2].folderId, isNull);
+    expect(find.text('1 selected'), findsOneWidget);
+    debugDefaultTargetPlatformOverride = null;
+  }, skip: !Platform.isWindows);
+
   testWidgets('tag filter searches existing tags across folders', (
     tester,
   ) async {
@@ -442,6 +525,64 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('2 selected'), findsOneWidget);
     expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  }, skip: !Platform.isWindows);
+
+  testWidgets('mobile drag handle moves selected items and clears selection', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    tester.view.physicalSize = const Size(400, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final store = _MemoryStore();
+    store.folders.add(LibraryFolder(id: 'destination', name: 'Destination'));
+    final media = Directory.systemTemp.createTempSync('memlib-touch-drag-');
+    store.media = media;
+    addTearDown(() => media.deleteSync(recursive: true));
+    File('${media.path}${Platform.pathSeparator}sample.png').writeAsBytesSync(
+      base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9hQ4sAAAAASUVORK5CYII=',
+      ),
+    );
+    for (var i = 0; i < 2; i++) {
+      store.items.add(
+        LibraryItem(
+          id: 'item$i',
+          name: 'Item $i',
+          filename: 'sample.png',
+          kind: 'sticker',
+        ),
+      );
+    }
+    await tester.pumpWidget(MemlibApp(store: store, enableTray: false));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('select-item0')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('select-item1')));
+    await tester.pumpAndSettle();
+    final handle = find.descendant(
+      of: find.byKey(const ValueKey('item-card-item0')),
+      matching: find.byTooltip('Drag selected items to a folder'),
+    );
+    final source = tester.getCenter(handle);
+    final target = tester.getCenter(
+      find.byKey(const ValueKey('folder-card-destination')),
+    );
+    final gesture = await tester.startGesture(source);
+    await gesture.moveBy(const Offset(-30, 0));
+    await tester.pump();
+    await gesture.moveTo(target);
+    await tester.pump();
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(
+      store.items.map((item) => item.folderId),
+      everyElement('destination'),
+    );
+    expect(find.text('2 selected'), findsNothing);
     debugDefaultTargetPlatformOverride = null;
   }, skip: !Platform.isWindows);
 
