@@ -14,58 +14,89 @@ class MemoryRemote implements RemoteLibrary {
   int revision = 0;
   String get nextVersion => 'v${++revision}';
 
-  LibraryFolder copyFolder(LibraryFolder folder) => LibraryFolder.fromJson(folder.toJson());
+  LibraryFolder copyFolder(LibraryFolder folder) =>
+      LibraryFolder.fromJson(folder.toJson());
   LibraryItem copyItem(LibraryItem item) => LibraryItem.fromJson(item.toJson());
 
   @override
-  Future<List<RemoteFolder>> fetchFolders(String ownerId) async => folders.values.map((row) => RemoteFolder(copyFolder(row.folder), row.version)).toList();
+  Future<List<RemoteFolder>> fetchFolders(String ownerId) async => folders
+      .values
+      .map((row) => RemoteFolder(copyFolder(row.folder), row.version))
+      .toList();
   @override
-  Future<List<RemoteItem>> fetchItems(String ownerId) async => items.values.map((row) => RemoteItem(copyItem(row.item), row.version, row.storagePath)).toList();
+  Future<List<RemoteItem>> fetchItems(String ownerId) async => items.values
+      .map(
+        (row) => RemoteItem(copyItem(row.item), row.version, row.storagePath),
+      )
+      .toList();
   @override
   Future<String> createFolder(String ownerId, LibraryFolder folder) async {
     final version = nextVersion;
     folders[folder.id] = RemoteFolder(copyFolder(folder), version);
     return version;
   }
+
   @override
-  Future<String?> updateFolder(String ownerId, LibraryFolder folder, String version) async {
+  Future<String?> updateFolder(
+    String ownerId,
+    LibraryFolder folder,
+    String version,
+  ) async {
     if (folders[folder.id]?.version != version) return null;
     final updated = nextVersion;
     folders[folder.id] = RemoteFolder(copyFolder(folder), updated);
     return updated;
   }
+
   @override
   Future<bool> deleteFolder(String ownerId, String id, String version) async {
     if (folders[id]?.version != version) return false;
     folders.remove(id);
     return true;
   }
+
   @override
-  Future<String> createItem(String ownerId, LibraryItem item, String storagePath) async {
+  Future<String> createItem(
+    String ownerId,
+    LibraryItem item,
+    String storagePath,
+  ) async {
     final version = nextVersion;
     items[item.id] = RemoteItem(copyItem(item), version, storagePath);
     return version;
   }
+
   @override
-  Future<String?> updateItem(String ownerId, LibraryItem item, String version) async {
+  Future<String?> updateItem(
+    String ownerId,
+    LibraryItem item,
+    String version,
+  ) async {
     final old = items[item.id];
     if (old?.version != version) return null;
     final updated = nextVersion;
     items[item.id] = RemoteItem(copyItem(item), updated, old!.storagePath);
     return updated;
   }
+
   @override
   Future<bool> deleteItem(String ownerId, String id, String version) async {
     if (items[id]?.version != version) return false;
     items.remove(id);
     return true;
   }
+
   @override
-  Future<void> uploadMedia(String path, File file) async { media[path] = await file.readAsBytes(); }
+  Future<void> uploadMedia(String path, File file) async {
+    media[path] = await file.readAsBytes();
+  }
+
   @override
   Future<List<int>> downloadMedia(String path) async => media[path]!;
   @override
-  Future<void> deleteMedia(String path) async { media.remove(path); }
+  Future<void> deleteMedia(String path) async {
+    media.remove(path);
+  }
 }
 
 Future<LibraryStore> deviceStore(Directory sandbox, String name) async {
@@ -108,7 +139,11 @@ void main() {
     await CloudSyncEngine(second, remote, ownerId).sync();
     expect(second.folders.single.name, 'Reactions');
     expect(second.items.single.name, 'wave');
-    expect(await second.fileFor(second.items.single).readAsBytes(), [71, 73, 70]);
+    expect(await second.fileFor(second.items.single).readAsBytes(), [
+      71,
+      73,
+      70,
+    ]);
 
     await second.updateItem(second.items.single, favorite: true);
     await CloudSyncEngine(second, remote, ownerId).sync();
@@ -132,51 +167,82 @@ void main() {
     expect(remote.media, isEmpty);
   });
 
-  test('reports a conflict and keeps both local and remote edits intact', () async {
-    await first.addFolder('Original');
+  test(
+    'reports a conflict and keeps both local and remote edits intact',
+    () async {
+      await first.addFolder('Original');
+      await CloudSyncEngine(first, remote, ownerId).sync();
+      await CloudSyncEngine(second, remote, ownerId).sync();
+      await first.renameFolder(first.folders.single, 'On first');
+      await second.renameFolder(second.folders.single, 'On second');
+      await CloudSyncEngine(second, remote, ownerId).sync();
+
+      await expectLater(
+        CloudSyncEngine(first, remote, ownerId).sync(),
+        throwsA(isA<SyncConflict>()),
+      );
+      expect(first.folders.single.name, 'On first');
+      expect(remote.folders.values.single.folder.name, 'On second');
+    },
+  );
+
+  test('preserves a saved GIPHY source and favourite across devices', () async {
+    await first.importBytes(
+      Uint8List.fromList([71, 73, 70, 56, 57, 97]),
+      name: 'Wave',
+      extension: 'gif',
+      sourceType: 'giphy',
+      sourceId: 'abc',
+      sourcePage: 'https://giphy.com/gifs/wave-abc',
+      favorite: true,
+    );
     await CloudSyncEngine(first, remote, ownerId).sync();
     await CloudSyncEngine(second, remote, ownerId).sync();
-    await first.renameFolder(first.folders.single, 'On first');
-    await second.renameFolder(second.folders.single, 'On second');
-    await CloudSyncEngine(second, remote, ownerId).sync();
-
-    await expectLater(CloudSyncEngine(first, remote, ownerId).sync(), throwsA(isA<SyncConflict>()));
-    expect(first.folders.single.name, 'On first');
-    expect(remote.folders.values.single.folder.name, 'On second');
-  });
-
-  test('preserves source and license details for saved open media', () async {
-    await first.importBytes(Uint8List.fromList([71, 73, 70, 56, 57, 97]), name: 'Wave', extension: 'gif', sourcePage: 'https://example.org/wave', licenseLabel: 'CC0', favorite: true);
-    await CloudSyncEngine(first, remote, ownerId).sync();
-    await CloudSyncEngine(second, remote, ownerId).sync();
-    expect(second.items.single.sourcePage, 'https://example.org/wave');
-    expect(second.items.single.licenseLabel, 'CC0');
+    expect(second.items.single.sourcePage, 'https://giphy.com/gifs/wave-abc');
+    expect(second.items.single.sourceType, 'giphy');
+    expect(second.items.single.sourceId, 'abc');
     expect(second.items.single.favorite, isTrue);
   });
 
-  test('resolving a folder conflict with the cloud pulls the remote edit', () async {
-    await first.addFolder('Original');
-    await CloudSyncEngine(first, remote, ownerId).sync();
-    await CloudSyncEngine(second, remote, ownerId).sync();
-    await first.renameFolder(first.folders.single, 'Local edit');
-    await second.renameFolder(second.folders.single, 'Cloud edit');
-    await CloudSyncEngine(second, remote, ownerId).sync();
-    final id = first.folders.single.id;
-    await first.resolveConflict('folder', id, keepDevice: false, remoteVersion: remote.folders[id]!.version);
-    await CloudSyncEngine(first, remote, ownerId).sync();
-    expect(first.folders.single.name, 'Cloud edit');
-  });
+  test(
+    'resolving a folder conflict with the cloud pulls the remote edit',
+    () async {
+      await first.addFolder('Original');
+      await CloudSyncEngine(first, remote, ownerId).sync();
+      await CloudSyncEngine(second, remote, ownerId).sync();
+      await first.renameFolder(first.folders.single, 'Local edit');
+      await second.renameFolder(second.folders.single, 'Cloud edit');
+      await CloudSyncEngine(second, remote, ownerId).sync();
+      final id = first.folders.single.id;
+      await first.resolveConflict(
+        'folder',
+        id,
+        keepDevice: false,
+        remoteVersion: remote.folders[id]!.version,
+      );
+      await CloudSyncEngine(first, remote, ownerId).sync();
+      expect(first.folders.single.name, 'Cloud edit');
+    },
+  );
 
-  test('resolving a folder conflict with the device publishes the local edit', () async {
-    await first.addFolder('Original');
-    await CloudSyncEngine(first, remote, ownerId).sync();
-    await CloudSyncEngine(second, remote, ownerId).sync();
-    await first.renameFolder(first.folders.single, 'Local edit');
-    await second.renameFolder(second.folders.single, 'Cloud edit');
-    await CloudSyncEngine(second, remote, ownerId).sync();
-    final id = first.folders.single.id;
-    await first.resolveConflict('folder', id, keepDevice: true, remoteVersion: remote.folders[id]!.version);
-    await CloudSyncEngine(first, remote, ownerId).sync();
-    expect(remote.folders[id]!.folder.name, 'Local edit');
-  });
+  test(
+    'resolving a folder conflict with the device publishes the local edit',
+    () async {
+      await first.addFolder('Original');
+      await CloudSyncEngine(first, remote, ownerId).sync();
+      await CloudSyncEngine(second, remote, ownerId).sync();
+      await first.renameFolder(first.folders.single, 'Local edit');
+      await second.renameFolder(second.folders.single, 'Cloud edit');
+      await CloudSyncEngine(second, remote, ownerId).sync();
+      final id = first.folders.single.id;
+      await first.resolveConflict(
+        'folder',
+        id,
+        keepDevice: true,
+        remoteVersion: remote.folders[id]!.version,
+      );
+      await CloudSyncEngine(first, remote, ownerId).sync();
+      expect(remote.folders[id]!.folder.name, 'Local edit');
+    },
+  );
 }

@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 /android/key.properties
+/android/.kotlin/
 *.jks
 *.pfx
 *.p12

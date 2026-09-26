@@ -1,6 +1,6 @@
 # Memlib
 
-A sticker and GIF library for Windows and Android. The library editor handles importing, folders, favourites and search. On Windows, **Ctrl+Alt+V** opens a frameless popup by default; type to search, use arrow keys to move, press Enter to paste, or Escape to dismiss. Selecting an item attempts to restore the previously focused input and paste into it. Clicking elsewhere closes the popup. Use Settings in the library toolbar to change the global shortcut or enable launch at sign-in. Android currently provides the library and clipboard copy; a keyboard/IME is the next platform milestone.
+A sticker and GIF library for Windows and Android. The library editor handles importing, folders, favourites and search. On Windows, **Ctrl+Alt+V** opens a frameless popup by default; type to search, use arrow keys to move, press Enter to paste, or Escape to dismiss. Selecting an item attempts to restore the previously focused input and paste into it. Clicking elsewhere closes the popup. Use Settings in the library toolbar to change the global shortcut or enable launch at sign-in. On Android, enable the Memlib keyboard to insert library items or GIPHY results from a text field in another app.
 
 When the Windows window is hidden, use the Memlib tray icon to reopen the library or launch the picker. The tray menu also has an Exit action. Launch at sign-in is off by default; when enabled, Memlib starts in the tray without opening the library window.
 
@@ -14,7 +14,7 @@ The local library lives under the app support directory. Imported files are copi
 
 ## Supabase sign-in and sync
 
-Create a Supabase project, then apply [`supabase/migrations/0001_library.sql`](supabase/migrations/0001_library.sql) and [`supabase/migrations/0002_item_source.sql`](supabase/migrations/0002_item_source.sql) in its SQL editor, in that order. If you already applied the first migration, apply only the second. The app accepts the URL and **publishable** key through Dart defines:
+Create a Supabase project, then apply [`supabase/migrations/0001_library.sql`](supabase/migrations/0001_library.sql), [`supabase/migrations/0002_item_source.sql`](supabase/migrations/0002_item_source.sql), and [`supabase/migrations/0003_source_identity.sql`](supabase/migrations/0003_source_identity.sql) in its SQL editor, in that order. Apply only migrations you have not already run. The app accepts the URL and **publishable** key through Dart defines:
 
 ```powershell
 flutter run -d windows --dart-define=SUPABASE_URL=https://YOUR_PROJECT.supabase.co --dart-define=SUPABASE_PUBLISHABLE_KEY=YOUR_PUBLISHABLE_KEY
@@ -22,9 +22,9 @@ flutter run -d windows --dart-define=SUPABASE_URL=https://YOUR_PROJECT.supabase.
 
 Open **Sign in** in the library toolbar to create an account or sign in with email and password. If email confirmation is enabled in Supabase, confirm the message first, then sign in. The app opens the account's local cache immediately and syncs folders, favourites, item details and media in the background. The account menu shows sync status and offers **Sync now** and **Sign out**. Files are stored in the private `library-media` bucket under the user's ID; the migration sets row and storage access policies. Keep the service role key out of the app.
 
-Your pre-sign-in library remains on this device as a guest library. After signing in, choose **Import local library** in the account menu to copy it into the account and upload it. This action can be repeated, so each import creates another copy. Signed-in libraries also remain cached on the device after sign-out for offline access when that account signs in again. If two devices edit the same item or folder while disconnected, the library shows **Use cloud** and **Keep device** choices; it does not silently overwrite either edit. Sync errors can be retried from the banner or account menu.
+Your pre-sign-in library remains on this device as a guest library. After signing in, choose **Import local library** in the account menu to copy it into the account and upload it. Repeating the import skips items already copied from that guest library. Signed-in libraries also remain cached on the device after sign-out for offline access when that account signs in again. If two devices edit the same item or folder while disconnected, the library shows **Use cloud** and **Keep device** choices; it does not silently overwrite either edit. Sync errors can be retried from the banner or account menu.
 
-If you already have a `.env` file containing `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, use `./tool/run.ps1 -Device android` (or `windows`). The script passes only those public values and optional GIPHY keys to Flutter. `.env` is ignored by Git.
+If you already have a `.env` file containing `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, use `./tool/run.ps1 -Device android` (or `windows`). The script passes those public values, optional GIPHY keys, and the optional GIPHY save permission flag to Flutter. `.env` is ignored by Git.
 
 GIPHY search uses a separate API key for each platform:
 
@@ -33,19 +33,25 @@ flutter run -d windows --dart-define=GIPHY_WINDOWS_KEY=YOUR_KEY
 flutter run -d android --dart-define=GIPHY_ANDROID_KEY=YOUR_KEY
 ```
 
-GIPHY results are displayed in their own view with attribution, including inside the Windows quick picker. Search is submitted explicitly to conserve API calls, and more results can be loaded on demand. Choosing a result copies it and, when opened from another app with the quick shortcut, attempts to paste it into the previous input. The app sends GIPHY's view, click, and send analytics events; it does not store GIPHY media in the library. GIPHY beta keys currently allow 100 API calls per hour. Review their current API terms before release.
+GIPHY results are displayed in their own view with attribution, including inside the Windows quick picker and Android keyboard. Search is submitted explicitly to conserve API calls, and more results can be loaded on demand. Choosing a result copies or inserts it. The app sends GIPHY's view, click, and send analytics events. GIPHY beta keys currently allow 100 API calls per hour.
 
-The **Saveable** tab searches Openverse for GIFs and sticker images marked CC0 or public domain. Use the download button to add one to the current library folder, or the star to save it as a favourite. Saved media and its source page and license label sync with your account. The info button copies the source link. Openverse does not verify every source's license, so inspect the linked source before redistributing an image outside your personal collection. GIPHY content stays in the separate quick-search view because its API terms restrict building a stored GIF library from its results.
+GIPHY library saving and favouriting are implemented but **disabled until you have GIPHY approval**. Once approved, set `GIPHY_LIBRARY_SAVES_ENABLED=true` in your local `.env` and add a repository Actions **variable** with that name and value for signed builds. The save button adds a result to the selected folder; the star adds it to favourites or toggles an already saved result. Each item stores `sourceType` and `sourceId` independently of its source page and file path; GIPHY uses its stable result ID to avoid importing the same result twice, even if its page URL changes. These fields sync through Supabase. Android keyboard save and star actions queue the selected GIF and finish importing it when Memlib next opens.
+
+## Android keyboard and sharing
+
+Open the keyboard icon in Memlib, choose **Set up keyboard**, and enable **Memlib stickers** in Android settings. In another app's text field, switch to the Memlib keyboard. Browse folders or favourites, search your library, or use the GIPHY tab. Tap an item to insert it into an editor that accepts image content. If that editor does not accept images from keyboards, Memlib copies the media URI to the clipboard; long-press the tile to open Android's share sheet. Use **ABC** for basic text entry and the globe button to return to another keyboard.
+
+Android can receive images shared from another app, including multiple images, and imports them into the selected folder. You can also use **Import files** or the keyboard icon's **Import image from clipboard** option in the main app. The Android keyboard reads the local library cache, so signed-in folders, favourites, and synced files remain available offline.
 
 ## Next milestones
 
-1. Android keyboard with rich GIF/sticker insertion, plus a share target for apps that do not accept rich keyboard content.
-2. Pinterest OAuth import after Pinterest approves API access. Map board/Pins to folders and preserve source attribution.
-3. Test focus restoration and paste behavior across target apps, then package the Windows app for installation.
+1. Test Android keyboard insertion, fallback sharing, and image imports on a physical device across target apps.
+2. Pinterest OAuth import after Pinterest approves API access. Map board/Pins to folders and use each Pin ID as the source identity to skip items already imported.
+3. Test Windows focus restoration and paste behavior across target apps, then package the Windows app for installation.
 
 ## Current limits
 
-The Windows paste uses an image clipboard entry for PNG and JPEG files, a file clipboard entry for GIF and WebP files, and simulated Ctrl+V. A target app may accept an image, animated GIF file, or neither depending on its editor. The selected item remains on the clipboard when automatic paste cannot complete. The Android app copies a media file URI to the clipboard, but cannot insert it directly into another app until the keyboard is implemented. GIPHY selections use a temporary transfer file, deleted after an hour when the app next copies GIPHY media.
+The Windows paste uses an image clipboard entry for PNG and JPEG files, a file clipboard entry for GIF and WebP files, and simulated Ctrl+V. A target app may accept an image, animated GIF file, or neither depending on its editor. The selected item remains on the clipboard when automatic paste cannot complete. Android insertion depends on the target editor declaring support for the image MIME type; other editors need the clipboard or share sheet. GIPHY selections use a temporary transfer file, deleted after an hour when the app next copies GIPHY media.
 
 Windows builds require Visual Studio's **Desktop development with C++** workload, MSVC build tools, CMake tools, and Windows SDK. Run `flutter doctor -v` to check the local installation.
 

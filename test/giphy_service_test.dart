@@ -6,47 +6,87 @@ import 'package:http/testing.dart';
 import 'package:memlib/giphy_service.dart';
 
 void main() {
-  test('GIPHY search pages results and skips entries without usable media', () async {
-    final requests = <Uri>[];
-    final client = MockClient((request) async {
-      requests.add(request.url);
-      if (request.url.host == 'giphy-analytics.giphy.com') return http.Response('', 200);
-      final offset = int.parse(request.url.queryParameters['offset']!);
-      return http.Response(jsonEncode({
-        'data': [
-          {
-            'id': 'result-$offset',
-            'title': 'Reaction $offset',
-            'images': {
-              'fixed_width_small': {'url': 'https://example.com/preview.gif'},
-              'original': {'url': 'https://example.com/original.gif'},
-            },
-            'analytics': {
-              'onclick': {'url': 'https://giphy-analytics.giphy.com/v2/pingback_simple?action_type=CLICK'},
-            },
-          },
-          {'id': 'broken', 'images': {}},
-        ],
-        'pagination': {'count': 2, 'total_count': 4},
-      }), 200);
-    });
-    final service = GiphyService(client: client, apiKey: 'test-key', customerId: 'test-user');
+  test(
+    'GIPHY search pages results and skips entries without usable media',
+    () async {
+      final requests = <Uri>[];
+      final client = MockClient((request) async {
+        requests.add(request.url);
+        if (request.url.host == 'giphy-analytics.giphy.com') {
+          return http.Response('', 200);
+        }
+        final offset = int.parse(request.url.queryParameters['offset']!);
+        return http.Response(
+          jsonEncode({
+            'data': [
+              {
+                'id': 'result-$offset',
+                'title': 'Reaction $offset',
+                'url': 'https://giphy.com/gifs/reaction-$offset',
+                'images': {
+                  'fixed_width_small': {
+                    'url': 'https://example.com/preview.gif',
+                  },
+                  'original': {'url': 'https://example.com/original.gif'},
+                },
+                'analytics': {
+                  'onclick': {
+                    'url': 'https://giphy-analytics.giphy.com/v2/pingback_simple?action_type=CLICK',
+                  },
+                },
+              },
+              {'id': 'broken', 'images': {}},
+            ],
+            'pagination': {'count': 2, 'total_count': 4},
+          }),
+          200,
+        );
+      });
+      final service = GiphyService(
+        client: client,
+        apiKey: 'test-key',
+        customerId: 'test-user',
+      );
 
-    final first = await service.search('face palm', stickers: true);
-    expect(first.items.map((item) => item.id), ['result-0']);
-    expect(first.nextOffset, 2);
-    expect(requests.first.path, '/v1/stickers/search');
-    expect(requests.first.queryParameters['q'], 'face palm');
+      final first = await service.search('face palm', stickers: true);
+      expect(first.items.map((item) => item.id), ['result-0']);
+      expect(first.items.single.pageUrl, 'https://giphy.com/gifs/reaction-0');
+      expect(first.nextOffset, 2);
+      expect(requests.first.path, '/v1/stickers/search');
+      expect(requests.first.queryParameters['q'], 'face palm');
 
-    final second = await service.search('face palm', stickers: true, offset: first.nextOffset!);
-    expect(second.items.map((item) => item.id), ['result-2']);
-    expect(second.nextOffset, isNull);
-    await service.track(first.items.first, GiphyAction.click);
-    final tracking = requests.last;
-    expect(tracking.host, 'giphy-analytics.giphy.com');
-    expect(tracking.queryParameters['action_type'], 'CLICK');
-    expect(tracking.queryParameters['customer_id'], isNotEmpty);
-    expect(tracking.queryParameters['ts'], isNotEmpty);
-    service.dispose();
-  });
+      final second = await service.search(
+        'face palm',
+        stickers: true,
+        offset: first.nextOffset!,
+      );
+      expect(second.items.map((item) => item.id), ['result-2']);
+      expect(second.nextOffset, isNull);
+      await service.track(first.items.first, GiphyAction.click);
+      final tracking = requests.last;
+      expect(tracking.host, 'giphy-analytics.giphy.com');
+      expect(tracking.queryParameters['action_type'], 'CLICK');
+      expect(tracking.queryParameters['customer_id'], isNotEmpty);
+      expect(tracking.queryParameters['ts'], isNotEmpty);
+      service.dispose();
+    },
+  );
+
+  test(
+    'GIPHY transfer reads the GIF for clipboard or permitted saving',
+    () async {
+      final service = GiphyService(
+        client: MockClient((_) async => http.Response('GIF89a', 200)),
+        apiKey: 'test-key',
+      );
+      const item = GiphyResult(
+        id: 'one',
+        title: 'One',
+        previewUrl: 'https://example.com/preview.gif',
+        gifUrl: 'https://example.com/original.gif',
+      );
+      expect(await service.fetchForShare(item), 'GIF89a'.codeUnits);
+      service.dispose();
+    },
+  );
 }

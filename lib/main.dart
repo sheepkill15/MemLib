@@ -13,41 +13,77 @@ import 'package:win32/win32.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'giphy_service.dart';
+import 'giphy_library.dart';
+import 'android_bridge.dart';
 import 'account_dialog.dart';
 import 'cloud_controller.dart';
 import 'library_store.dart';
 import 'media_actions.dart';
-import 'openverse_panel.dart';
 import 'picker_navigation.dart';
 import 'shortcut_settings.dart';
 import 'windows_tray.dart';
 
-const supabaseUrl = String.fromEnvironment('SUPABASE_URL', defaultValue: String.fromEnvironment('NEXT_PUBLIC_SUPABASE_URL'));
-const supabasePublishableKey = String.fromEnvironment('SUPABASE_PUBLISHABLE_KEY', defaultValue: String.fromEnvironment('NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY'));
+const supabaseUrl = String.fromEnvironment(
+  'SUPABASE_URL',
+  defaultValue: String.fromEnvironment('NEXT_PUBLIC_SUPABASE_URL'),
+);
+const supabasePublishableKey = String.fromEnvironment(
+  'SUPABASE_PUBLISHABLE_KEY',
+  defaultValue: String.fromEnvironment('NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY'),
+);
 
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   if (supabaseUrl.isNotEmpty && supabasePublishableKey.isNotEmpty) {
-    await Supabase.initialize(url: supabaseUrl, publishableKey: supabasePublishableKey);
+    await Supabase.initialize(
+      url: supabaseUrl,
+      publishableKey: supabasePublishableKey,
+    );
   }
   if (Platform.isWindows) {
-    launchAtStartup.setup(appName: 'Memlib', appPath: '"${Platform.resolvedExecutable}"', args: ['--background']);
+    launchAtStartup.setup(
+      appName: 'Memlib',
+      appPath: '"${Platform.resolvedExecutable}"',
+      args: ['--background'],
+    );
     await windowManager.ensureInitialized();
     await windowManager.waitUntilReadyToShow(
-      const WindowOptions(size: Size(1050, 720), minimumSize: Size(600, 500), title: 'Memlib'),
-      () async { if (args.contains('--background')) { await windowManager.hide(); } else { await windowManager.show(); } },
+      const WindowOptions(
+        size: Size(1050, 720),
+        minimumSize: Size(600, 500),
+        title: 'Memlib',
+      ),
+      () async {
+        if (args.contains('--background')) {
+          await windowManager.hide();
+        } else {
+          await windowManager.show();
+        }
+      },
     );
   }
   final store = LibraryStore();
   await store.load();
-  final cloud = CloudController(store, supabaseUrl.isNotEmpty && supabasePublishableKey.isNotEmpty ? Supabase.instance.client : null);
+  final cloud = CloudController(
+    store,
+    supabaseUrl.isNotEmpty && supabasePublishableKey.isNotEmpty
+        ? Supabase.instance.client
+        : null,
+  );
   await cloud.start();
+  await AndroidBridge.initialize(store);
   final shortcut = Platform.isWindows ? await ShortcutSettings.load() : null;
   runApp(MemlibApp(store: store, cloud: cloud, initialShortcut: shortcut));
 }
 
 class MemlibApp extends StatelessWidget {
-  const MemlibApp({super.key, required this.store, this.enableTray = true, this.initialShortcut, this.cloud});
+  const MemlibApp({
+    super.key,
+    required this.store,
+    this.enableTray = true,
+    this.initialShortcut,
+    this.cloud,
+  });
   final LibraryStore store;
   final bool enableTray;
   final HotKey? initialShortcut;
@@ -59,18 +95,44 @@ class MemlibApp extends StatelessWidget {
     debugShowCheckedModeBanner: false,
     theme: ThemeData(
       useMaterial3: true,
-      colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF7C5CDE), brightness: Brightness.dark),
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: const Color(0xFF7C5CDE),
+        brightness: Brightness.dark,
+      ),
       scaffoldBackgroundColor: const Color(0xFF121019),
-      appBarTheme: const AppBarTheme(backgroundColor: Color(0xFF1B1724), foregroundColor: Colors.white, elevation: 0),
-      cardTheme: CardThemeData(color: const Color(0xFF24202E), elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
-      inputDecorationTheme: InputDecorationTheme(filled: true, fillColor: const Color(0xFF211C2B), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14))),
+      appBarTheme: const AppBarTheme(
+        backgroundColor: Color(0xFF1B1724),
+        foregroundColor: Colors.white,
+        elevation: 0,
+      ),
+      cardTheme: CardThemeData(
+        color: const Color(0xFF24202E),
+        elevation: 0,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: const Color(0xFF211C2B),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+      ),
     ),
-    home: LibraryScreen(store: store, cloud: cloud, enableTray: enableTray, initialShortcut: initialShortcut),
+    home: LibraryScreen(
+      store: store,
+      cloud: cloud,
+      enableTray: enableTray,
+      initialShortcut: initialShortcut,
+    ),
   );
 }
 
 class LibraryScreen extends StatefulWidget {
-  const LibraryScreen({super.key, required this.store, this.enableTray = true, this.initialShortcut, this.cloud});
+  const LibraryScreen({
+    super.key,
+    required this.store,
+    this.enableTray = true,
+    this.initialShortcut,
+    this.cloud,
+  });
   final LibraryStore store;
   final bool enableTray;
   final HotKey? initialShortcut;
@@ -80,9 +142,12 @@ class LibraryScreen extends StatefulWidget {
   State<LibraryScreen> createState() => _LibraryScreenState();
 }
 
-class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
+class _LibraryScreenState extends State<LibraryScreen>
+    with WindowListener, WidgetsBindingObserver {
   final actions = MediaActions();
   final giphy = GiphyService();
+  late final giphyLibrary = GiphyLibrary(widget.store, giphy.fetchForShare);
+  final savingGiphy = <String>{};
   final searchController = TextEditingController();
   final giphyController = TextEditingController();
   final searchFocus = FocusNode();
@@ -91,7 +156,6 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
   bool favoritesOnly = false;
   bool picker = false;
   bool giphyTab = false;
-  bool openverseTab = false;
   bool stickerSearch = false;
   bool busy = false;
   bool giphyHasMore = false;
@@ -110,6 +174,9 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
   String? shownAccountId;
   late HotKey hotkey;
   WindowsTray? windowsTray;
+  StreamSubscription<void>? sharedImagesSubscription;
+  bool drainingAndroid = false;
+  bool drainAndroidAgain = false;
 
   @override
   void initState() {
@@ -117,23 +184,45 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
     shownAccountId = widget.store.accountId;
     widget.store.addListener(_refresh);
     widget.cloud?.addListener(_refresh);
+    if (Platform.isAndroid) {
+      WidgetsBinding.instance.addObserver(this);
+      sharedImagesSubscription = AndroidBridge.sharedImagesReady.listen(
+        (_) => unawaited(_drainAndroidPending()),
+      );
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_drainAndroidPending());
+      });
+    }
     if (Platform.isWindows) {
       if (widget.enableTray) unawaited(_loadStartupSetting());
       windowManager.addListener(this);
       HardwareKeyboard.instance.addHandler(_handlePickerKey);
       hotkey = widget.initialShortcut ?? ShortcutSettings.defaultShortcut();
-      hotKeyManager.register(hotkey, keyDownHandler: (_) => _togglePicker(fromShortcut: true)).catchError((Object e) {
-        if (mounted) setState(() => error = 'Global shortcut unavailable: $e');
-      });
+      hotKeyManager
+          .register(
+            hotkey,
+            keyDownHandler: (_) => _togglePicker(fromShortcut: true),
+          )
+          .catchError((Object e) {
+            if (mounted) {
+              setState(() => error = 'Global shortcut unavailable: $e');
+            }
+          });
       if (widget.enableTray) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted) return;
           try {
             windowsTray = WindowsTray();
             final ready = windowsTray!.initialize(
-              openLibrary: () { if (mounted) unawaited(_openLibrary()); },
-              openPicker: () { if (mounted && !picker) unawaited(_togglePicker()); },
-              exitApp: () { if (mounted) unawaited(windowManager.close()); },
+              openLibrary: () {
+                if (mounted) unawaited(_openLibrary());
+              },
+              openPicker: () {
+                if (mounted && !picker) unawaited(_togglePicker());
+              },
+              exitApp: () {
+                if (mounted) unawaited(windowManager.close());
+              },
               shortcutLabel: hotkey.debugName,
             );
             if (!ready) {
@@ -150,6 +239,10 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
 
   @override
   void dispose() {
+    if (Platform.isAndroid) {
+      WidgetsBinding.instance.removeObserver(this);
+      sharedImagesSubscription?.cancel();
+    }
     if (Platform.isWindows) {
       hotKeyManager.unregister(hotkey);
       windowsTray?.dispose();
@@ -171,11 +264,95 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
     setState(() {
       if (shownAccountId != widget.store.accountId) {
         shownAccountId = widget.store.accountId;
+        if (Platform.isAndroid) {
+          unawaited(AndroidBridge.setLibraryRoot(widget.store));
+        }
         selectedFolder = null;
         favoritesOnly = false;
         selectedIndex = 0;
       }
     });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (Platform.isAndroid && state == AppLifecycleState.resumed) {
+      unawaited(_drainAndroidPending());
+    }
+  }
+
+  Future<void> _drainAndroidPending() async {
+    if (!Platform.isAndroid) return;
+    if (drainingAndroid) {
+      drainAndroidAgain = true;
+      return;
+    }
+    drainingAndroid = true;
+    try {
+      final used = await AndroidBridge.drainUsedIds();
+      for (final id in used) {
+        final item = widget.store.items
+            .where((item) => item.id == id)
+            .firstOrNull;
+        if (item != null) await widget.store.markUsed(item);
+      }
+      for (final pending in await AndroidBridge.drainGiphySaves()) {
+        final file = File(pending['path'] as String);
+        try {
+          final result = GiphyResult(
+            id: pending['id'] as String,
+            title: pending['name'] as String,
+            previewUrl: '',
+            gifUrl: '',
+            pageUrl: pending['sourcePage'] as String,
+          );
+          final existing = giphyLibrary.savedItem(result);
+          if (pending['toggle'] == true && existing != null) {
+            await giphyLibrary.setFavorite(result, pending['favorite'] == true);
+          } else {
+            final bytes = await file.readAsBytes();
+            if (pending['toggle'] == true) {
+              await giphyLibrary.setFavorite(
+                result,
+                pending['favorite'] == true,
+                downloadedBytes: bytes,
+              );
+            } else {
+              await giphyLibrary.save(result, downloadedBytes: bytes);
+            }
+          }
+          await AndroidBridge.ackGiphySave(file.path);
+          if (await file.exists()) await file.delete();
+        } catch (e) {
+          if (mounted) {
+            _showError('Could not save a GIPHY result from the keyboard: $e');
+          }
+        }
+      }
+      while (mounted) {
+        final paths = await AndroidBridge.drainSharedImages();
+        if (paths.isEmpty) break;
+        final imported = await _importPaths(paths);
+        if (!imported) break;
+        await AndroidBridge.ackSharedImages(paths);
+        for (final path in paths) {
+          final file = File(path);
+          if (await file.exists()) await file.delete();
+          final parent = file.parent;
+          if (await parent.exists() && await parent.list().isEmpty) {
+            await parent.delete();
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) _showError('Could not import shared images: $e');
+    } finally {
+      drainingAndroid = false;
+      if (drainAndroidAgain && mounted) {
+        drainAndroidAgain = false;
+        unawaited(_drainAndroidPending());
+      }
+    }
   }
 
   Future<void> _loadStartupSetting() async {
@@ -189,11 +366,19 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
 
   Future<void> _toggleStartup() async {
     try {
-      final enabled = startupEnabled ? await launchAtStartup.disable() : await launchAtStartup.enable();
+      final enabled = startupEnabled
+          ? await launchAtStartup.disable()
+          : await launchAtStartup.enable();
       if (!enabled) throw StateError('Windows did not accept the change');
       await _loadStartupSetting();
-      _showError(startupEnabled ? 'Memlib will start in the tray when you sign in.' : 'Launch at sign-in is off.');
-    } catch (e) { _showError('Could not change launch at sign-in: $e'); }
+      _showError(
+        startupEnabled
+            ? 'Memlib will start in the tray when you sign in.'
+            : 'Launch at sign-in is off.',
+      );
+    } catch (e) {
+      _showError('Could not change launch at sign-in: $e');
+    }
   }
 
   @override
@@ -203,7 +388,8 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
 
   bool _handlePickerKey(KeyEvent event) {
     if (event is! KeyDownEvent) return false;
-    if (!picker && Platform.isWindows &&
+    if (!picker &&
+        Platform.isWindows &&
         event.logicalKey == LogicalKeyboardKey.keyV &&
         HardwareKeyboard.instance.isControlPressed &&
         !HardwareKeyboard.instance.isAltPressed &&
@@ -227,19 +413,31 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
     };
     if (direction != null) {
       if (giphyTab) giphyNavigating = true;
-      _selectPickerIndex(movePickerSelection(selectedIndex, giphyTab ? results.length : visibleItems.length, 4, direction));
+      _selectPickerIndex(
+        movePickerSelection(
+          selectedIndex,
+          giphyTab ? results.length : visibleItems.length,
+          4,
+          direction,
+        ),
+      );
       return true;
     }
-    if (key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.numpadEnter) {
+    if (key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter) {
       if (giphyTab) {
         if (!giphyNavigating || results.isEmpty) {
           unawaited(_searchGiphy());
         } else if (results.isNotEmpty) {
-          unawaited(_useGiphy(results[selectedIndex.clamp(0, results.length - 1)]));
+          unawaited(
+            _useGiphy(results[selectedIndex.clamp(0, results.length - 1)]),
+          );
         }
       } else {
         final items = visibleItems;
-        if (items.isNotEmpty) unawaited(_useItem(items[selectedIndex.clamp(0, items.length - 1)]));
+        if (items.isNotEmpty) {
+          unawaited(_useItem(items[selectedIndex.clamp(0, items.length - 1)]));
+        }
       }
       return true;
     }
@@ -250,16 +448,28 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
     setState(() => selectedIndex = index);
     final itemsLength = giphyTab ? results.length : visibleItems.length;
     if (index < 0 || index >= itemsLength) return;
-    final id = giphyTab ? 'giphy-${results[index].id}' : 'picker-${visibleItems[index].id}';
+    final id = giphyTab
+        ? 'giphy-${results[index].id}'
+        : 'picker-${visibleItems[index].id}';
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !picker) return;
       final card = GlobalObjectKey(id).currentContext;
-      if (card != null) Scrollable.ensureVisible(card, duration: const Duration(milliseconds: 110), alignment: 0.2);
+      if (card != null) {
+        Scrollable.ensureVisible(
+          card,
+          duration: const Duration(milliseconds: 110),
+          alignment: 0.2,
+        );
+      }
     });
   }
 
   void _switchTab(bool giphySelected) {
-    setState(() { giphyTab = giphySelected; openverseTab = false; selectedIndex = 0; giphyNavigating = false; });
+    setState(() {
+      giphyTab = giphySelected;
+      selectedIndex = 0;
+      giphyNavigating = false;
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) (giphySelected ? giphyFocus : searchFocus).requestFocus();
     });
@@ -277,7 +487,9 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
     }
     if (fromShortcut) {
       actions.rememberTarget();
-      if (actions.previousWindow == await windowManager.getId()) actions.clearTarget();
+      if (actions.previousWindow == await windowManager.getId()) {
+        actions.clearTarget();
+      }
     } else {
       actions.clearTarget();
     }
@@ -285,7 +497,13 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
     try {
       await windowManager.hide();
       searchController.clear();
-      setState(() { picker = true; giphyTab = false; openverseTab = false; selectedFolder = null; favoritesOnly = false; selectedIndex = 0; });
+      setState(() {
+        picker = true;
+        giphyTab = false;
+        selectedFolder = null;
+        favoritesOnly = false;
+        selectedIndex = 0;
+      });
       await windowManager.setAsFrameless();
       await windowManager.setResizable(false);
       await windowManager.setSkipTaskbar(true);
@@ -294,7 +512,9 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
       await windowManager.center();
       await windowManager.show();
       await windowManager.focus();
-      WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted && picker) searchFocus.requestFocus(); });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && picker) searchFocus.requestFocus();
+      });
     } finally {
       windowTransition = false;
     }
@@ -347,35 +567,58 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
 
   Future<void> _changeShortcut() async {
     HotKey? recorded;
-    final candidate = await showDialog<HotKey>(context: context, builder: (context) => StatefulBuilder(
-      builder: (context, update) => AlertDialog(
-        title: const Text('Quick picker shortcut'),
-        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Current: ${hotkey.debugName}'),
-          const SizedBox(height: 16),
-          const Text('Press a new key combination:'),
-          const SizedBox(height: 8),
-          HotKeyRecorder(onHotKeyRecorded: (value) => update(() => recorded = value)),
-          const SizedBox(height: 12),
-          const Text('Use Ctrl, Alt, or the Windows key with another key.', style: TextStyle(fontSize: 12)),
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: recorded != null && ShortcutSettings.isUsable(recorded!)
-              ? () => Navigator.pop(context, recorded) : null,
-            child: const Text('Save'),
+    final candidate = await showDialog<HotKey>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, update) => AlertDialog(
+          title: const Text('Quick picker shortcut'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Current: ${hotkey.debugName}'),
+              const SizedBox(height: 16),
+              const Text('Press a new key combination:'),
+              const SizedBox(height: 8),
+              HotKeyRecorder(
+                onHotKeyRecorded: (value) => update(() => recorded = value),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Use Ctrl, Alt, or the Windows key with another key.',
+                style: TextStyle(fontSize: 12),
+              ),
+            ],
           ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed:
+                  recorded != null && ShortcutSettings.isUsable(recorded!)
+                  ? () => Navigator.pop(context, recorded)
+                  : null,
+              child: const Text('Save'),
+            ),
+          ],
+        ),
       ),
-    ));
+    );
     if (candidate == null || !mounted) return;
-    final sameKey = candidate.physicalKey == hotkey.physicalKey &&
-      (candidate.modifiers ?? []).toSet().containsAll(hotkey.modifiers ?? []) &&
-      (candidate.modifiers ?? []).length == (hotkey.modifiers ?? []).length;
+    final sameKey =
+        candidate.physicalKey == hotkey.physicalKey &&
+        (candidate.modifiers ?? []).toSet().containsAll(
+          hotkey.modifiers ?? [],
+        ) &&
+        (candidate.modifiers ?? []).length == (hotkey.modifiers ?? []).length;
     if (sameKey) return;
     try {
-      await hotKeyManager.register(candidate, keyDownHandler: (_) => _togglePicker(fromShortcut: true));
+      await hotKeyManager.register(
+        candidate,
+        keyDownHandler: (_) => _togglePicker(fromShortcut: true),
+      );
       await ShortcutSettings.save(candidate);
       await hotKeyManager.unregister(hotkey);
       if (mounted) setState(() => hotkey = candidate);
@@ -387,30 +630,105 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
   }
 
   Future<void> _import() async {
-    const images = XTypeGroup(label: 'Images', extensions: ['png', 'gif', 'jpg', 'jpeg', 'webp'], mimeTypes: ['image/png', 'image/gif', 'image/jpeg', 'image/webp']);
+    const images = XTypeGroup(
+      label: 'Images',
+      extensions: ['png', 'gif', 'jpg', 'jpeg', 'webp'],
+      mimeTypes: ['image/png', 'image/gif', 'image/jpeg', 'image/webp'],
+    );
     final picked = await openFiles(acceptedTypeGroups: [images]);
-    await _importPaths(picked.map((e) => e.path).toList());
+    if (Platform.isAndroid) {
+      var added = 0;
+      for (final file in picked) {
+        try {
+          final extension = file.name.split('.').last.toLowerCase();
+          if (!{'png', 'gif', 'jpg', 'jpeg', 'webp'}.contains(extension)) {
+            continue;
+          }
+          if (await file.length() > 30 * 1024 * 1024) {
+            throw const FormatException('Images must be under 30 MB');
+          }
+          await widget.store.importBytes(
+            await file.readAsBytes(),
+            name: file.name.replaceFirst(RegExp(r'\.[^.]+$'), ''),
+            extension: extension,
+            folderId: selectedFolder,
+          );
+          added++;
+        } catch (e) {
+          _showError('Could not import ${file.name}: $e');
+        }
+      }
+      if (added > 0) {
+        _showError('Imported $added ${added == 1 ? 'item' : 'items'}.');
+      }
+    } else {
+      await _importPaths(picked.map((e) => e.path).toList());
+    }
   }
 
-  Future<void> _importPaths(List<String> paths) async {
-    if (paths.isEmpty) return;
-    final supported = paths.where((path) => RegExp(r'\.(png|gif|jpe?g|webp)$', caseSensitive: false).hasMatch(path)).toList();
-    if (supported.isEmpty) { _showError('Drop PNG, GIF, JPEG, or WebP files.'); return; }
+  Future<bool> _importPaths(List<String> paths) async {
+    if (paths.isEmpty) return false;
+    final supported = paths
+        .where(
+          (path) => RegExp(
+            r'\.(png|gif|jpe?g|webp)$',
+            caseSensitive: false,
+          ).hasMatch(path),
+        )
+        .toList();
+    if (supported.isEmpty) {
+      _showError('Choose PNG, GIF, JPEG, or WebP files.');
+      return false;
+    }
     try {
       final before = widget.store.items.length;
       await widget.store.importFiles(supported, folderId: selectedFolder);
       final added = widget.store.items.length - before;
-      _showError(added == 0 ? 'No images were imported.' : 'Imported $added ${added == 1 ? 'item' : 'items'}.');
-    } catch (e) { _showError('Import failed: $e'); }
+      _showError(
+        added == 0
+            ? 'No images were imported.'
+            : 'Imported $added ${added == 1 ? 'item' : 'items'}.',
+      );
+      return added > 0;
+    } catch (e) {
+      _showError('Import failed: $e');
+      return false;
+    }
   }
 
   void _showError(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _showKeyboardSetup() async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Use Memlib in other apps'),
+        content: const Text(
+          '1. Enable “Memlib stickers” in Android keyboard settings.\n\n2. Open a text field and switch to the Memlib keyboard. Tap a GIF or sticker to insert it. Long-press one to share it.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => AndroidBridge.openKeyboardSettings(),
+            child: const Text('Enable keyboard'),
+          ),
+          FilledButton(
+            onPressed: () => AndroidBridge.showKeyboardPicker(),
+            child: const Text('Switch keyboard'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<String?> _askName(String title, {String initial = ''}) async {
-    return showDialog<String>(context: context, builder: (_) => _NameDialog(title: title, initial: initial));
+    return showDialog<String>(
+      context: context,
+      builder: (_) => _NameDialog(title: title, initial: initial),
+    );
   }
 
   Future<void> _useItem(LibraryItem item) async {
@@ -418,11 +736,16 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
       await actions.copyFile(widget.store.fileFor(item));
       await widget.store.markUsed(item);
       await _afterCopy();
-    } catch (e) { _showError('Could not copy: $e'); }
+    } catch (e) {
+      _showError('Could not copy: $e');
+    }
   }
 
   Future<void> _afterCopy() async {
-    if (!picker || !Platform.isWindows) { _showError('Copied to clipboard'); return; }
+    if (!picker || !Platform.isWindows) {
+      _showError('Copied to clipboard');
+      return;
+    }
     if (actions.previousWindow == null) {
       await _openLibrary();
       _showError('Copied to clipboard');
@@ -438,7 +761,9 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
       if (!pasted) {
         await windowManager.show();
         await windowManager.focus();
-        _showError('Copied. Automatic paste did not work; press Ctrl+V in the target app.');
+        _showError(
+          'Copied. Automatic paste did not work; press Ctrl+V in the target app.',
+        );
       }
     } finally {
       pasting = false;
@@ -451,9 +776,23 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
     if (query.isEmpty || (more && !giphyHasMore)) return;
     final offset = more ? giphyOffset : 0;
     final request = ++giphyRequest;
-    setState(() { busy = true; error = null; if (!more) { results = []; seenGiphy.clear(); selectedIndex = 0; giphyHasMore = false; giphyNavigating = false; } });
+    setState(() {
+      busy = true;
+      error = null;
+      if (!more) {
+        results = [];
+        seenGiphy.clear();
+        selectedIndex = 0;
+        giphyHasMore = false;
+        giphyNavigating = false;
+      }
+    });
     try {
-      final page = await giphy.search(query, stickers: stickerSearch, offset: offset);
+      final page = await giphy.search(
+        query,
+        stickers: stickerSearch,
+        offset: offset,
+      );
       if (mounted && request == giphyRequest) {
         setState(() {
           giphyQuery = query;
@@ -462,8 +801,11 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
           giphyHasMore = page.nextOffset != null;
         });
       }
-    } catch (e) { if (mounted && request == giphyRequest) setState(() => error = '$e'); }
-    finally { if (mounted && request == giphyRequest) setState(() => busy = false); }
+    } catch (e) {
+      if (mounted && request == giphyRequest) setState(() => error = '$e');
+    } finally {
+      if (mounted && request == giphyRequest) setState(() => busy = false);
+    }
   }
 
   Future<void> _useGiphy(GiphyResult item) async {
@@ -474,16 +816,53 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
       await actions.copyBytes(bytes, 'gif');
       await _afterCopy();
       unawaited(giphy.track(item, GiphyAction.send));
-    } catch (e) { _showError('Could not copy GIF: $e'); }
-    finally { if (mounted) setState(() => busy = false); }
+    } catch (e) {
+      _showError('Could not copy GIF: $e');
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> _saveGiphy(
+    GiphyResult item, {
+    bool toggleFavorite = false,
+  }) async {
+    if (savingGiphy.contains(item.id) || !giphyLibrary.allowSaves) return;
+    setState(() => savingGiphy.add(item.id));
+    try {
+      unawaited(giphy.track(item, GiphyAction.click));
+      if (toggleFavorite) {
+        final saved = await giphyLibrary.toggleFavorite(
+          item,
+          folderId: selectedFolder,
+        );
+        _showError(
+          saved.favorite ? 'Added to favourites' : 'Removed from favourites',
+        );
+      } else {
+        final alreadySaved = giphyLibrary.savedItem(item) != null;
+        await giphyLibrary.save(item, folderId: selectedFolder);
+        _showError(
+          alreadySaved ? 'Already in your library' : 'Saved to your library',
+        );
+      }
+    } catch (e) {
+      _showError('Could not save GIF: $e');
+    } finally {
+      if (mounted) setState(() => savingGiphy.remove(item.id));
+    }
   }
 
   List<LibraryItem> get visibleItems {
     final query = searchController.text.trim().toLowerCase();
-    final items = widget.store.items.where((item) =>
-      (selectedFolder == null || item.folderId == selectedFolder) &&
-      (!favoritesOnly || item.favorite) &&
-      (query.isEmpty || item.name.toLowerCase().contains(query))).toList();
+    final items = widget.store.items
+        .where(
+          (item) =>
+              (selectedFolder == null || item.folderId == selectedFolder) &&
+              (!favoritesOnly || item.favorite) &&
+              (query.isEmpty || item.name.toLowerCase().contains(query)),
+        )
+        .toList();
     items.sort((a, b) {
       if (a.favorite != b.favorite) return a.favorite ? -1 : 1;
       return b.useCount.compareTo(a.useCount);
@@ -491,21 +870,20 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
     return items;
   }
 
-  void _switchMainTab(int tab) {
-    if (tab == 2) {
-      setState(() { openverseTab = true; giphyTab = false; });
-    } else {
-      _switchTab(tab == 1);
-    }
-  }
+  void _switchMainTab(int tab) => _switchTab(tab == 1);
 
   Future<void> _importClipboardFiles() async {
     try {
       final paths = await Pasteboard.files();
       if (!mounted) return;
-      if (paths.isEmpty) { _showError('No files found on the clipboard.'); return; }
+      if (paths.isEmpty) {
+        _showError('No files found on the clipboard.');
+        return;
+      }
       await _importPaths(paths);
-    } catch (e) { _showError('Could not import clipboard files: $e'); }
+    } catch (e) {
+      _showError('Could not import clipboard files: $e');
+    }
   }
 
   Future<void> _accountAction(String action) async {
@@ -516,35 +894,88 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
       if (action == 'signout') await cloud.signOut();
       if (action == 'import') {
         if (!mounted) return;
-        final confirmed = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
-          title: const Text('Import local library?'),
-          content: const Text('Copy your guest folders and media into this account. Your existing cloud library stays in place.'),
-          actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')), FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Import'))],
-        ));
+        final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Import local library?'),
+            content: const Text(
+              'Copy your guest folders and media into this account. Your existing cloud library stays in place.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Import'),
+              ),
+            ],
+          ),
+        );
         if (confirmed == true) {
           final count = await cloud.importGuestLibrary();
           if (mounted) _showError('Imported $count items. Syncing now.');
         }
       }
-      if (cloud.syncError != null && mounted) { _showError(cloud.syncError!); }
-    } catch (e) { if (mounted) _showError('Account action failed: $e'); }
+      if (cloud.syncError != null && mounted) {
+        _showError(cloud.syncError!);
+      }
+    } catch (e) {
+      if (mounted) _showError('Account action failed: $e');
+    }
   }
 
   Widget _accountButton() {
     final cloud = widget.cloud;
     if (cloud == null || !cloud.configured) return const SizedBox.shrink();
     if (!cloud.signedIn) {
-      return TextButton.icon(onPressed: () => showDialog<bool>(context: context, builder: (_) => AccountDialog(cloud: cloud)), icon: const Icon(Icons.person_outline), label: const Text('Sign in'));
+      return TextButton.icon(
+        onPressed: () => showDialog<bool>(
+          context: context,
+          builder: (_) => AccountDialog(cloud: cloud),
+        ),
+        icon: const Icon(Icons.person_outline),
+        label: const Text('Sign in'),
+      );
     }
     return PopupMenuButton<String>(
-      tooltip: cloud.syncError ?? (cloud.syncing ? 'Syncing' : 'Account and sync'),
-      icon: Icon(cloud.syncError != null ? Icons.cloud_off_outlined : cloud.syncing ? Icons.sync : Icons.cloud_done_outlined),
+      tooltip:
+          cloud.syncError ?? (cloud.syncing ? 'Syncing' : 'Account and sync'),
+      icon: Icon(
+        cloud.syncError != null
+            ? Icons.cloud_off_outlined
+            : cloud.syncing
+            ? Icons.sync
+            : Icons.cloud_done_outlined,
+      ),
       onSelected: (value) => unawaited(_accountAction(value)),
       itemBuilder: (_) => [
-        PopupMenuItem<String>(enabled: false, child: Text(cloud.email ?? 'Signed in', overflow: TextOverflow.ellipsis)),
-        PopupMenuItem<String>(enabled: false, child: Text(cloud.syncError != null ? 'Sync needs attention' : cloud.syncing ? 'Syncing…' : cloud.lastSyncedAt == null ? 'Waiting to sync' : 'Up to date')),
+        PopupMenuItem<String>(
+          enabled: false,
+          child: Text(
+            cloud.email ?? 'Signed in',
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        PopupMenuItem<String>(
+          enabled: false,
+          child: Text(
+            cloud.syncError != null
+                ? 'Sync needs attention'
+                : cloud.syncing
+                ? 'Syncing…'
+                : cloud.lastSyncedAt == null
+                ? 'Waiting to sync'
+                : 'Up to date',
+          ),
+        ),
         const PopupMenuItem(value: 'sync', child: Text('Sync now')),
-        if (cloud.guestLibraryAvailable) const PopupMenuItem(value: 'import', child: Text('Import local library')),
+        if (cloud.guestLibraryAvailable)
+          const PopupMenuItem(
+            value: 'import',
+            child: Text('Import local library'),
+          ),
         const PopupMenuItem(value: 'signout', child: Text('Sign out')),
       ],
     );
@@ -553,232 +984,1056 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width > 720 && !picker;
-    final content = picker ? _pickerView() : Row(children: [
-      if (wide) SizedBox(width: 220, child: _sidebar()),
-      Expanded(child: Column(children: [
-        if (!picker && widget.cloud?.syncError != null) MaterialBanner(
-          content: Text(widget.cloud!.syncError!, maxLines: 2, overflow: TextOverflow.ellipsis),
-          actions: [
-            if (widget.cloud!.conflict != null) ...[
-              TextButton(onPressed: () => unawaited(widget.cloud!.resolveConflict(keepDevice: false)), child: const Text('Use cloud')),
-              TextButton(onPressed: () => unawaited(widget.cloud!.resolveConflict(keepDevice: true)), child: const Text('Keep device')),
-            ] else TextButton(onPressed: () => unawaited(widget.cloud!.syncNow()), child: const Text('Retry')),
-          ],
-        ),
-        if (!picker) Padding(padding: const EdgeInsets.fromLTRB(16, 8, 16, 4), child: SegmentedButton<int>(segments: const [ButtonSegment(value: 0, label: Text('Library'), icon: Icon(Icons.collections_outlined)), ButtonSegment(value: 1, label: Text('GIPHY'), icon: Icon(Icons.search)), ButtonSegment(value: 2, label: Text('Saveable'), icon: Icon(Icons.download_outlined))], selected: {openverseTab ? 2 : giphyTab ? 1 : 0}, onSelectionChanged: (v) => _switchMainTab(v.first))),
-        if (openverseTab && !picker) Expanded(child: OpenversePanel(store: widget.store, folderId: selectedFolder)) else if (giphyTab && !picker) Expanded(child: _giphyView()) else Expanded(child: _libraryView(wide)),
-      ])),
-    ]);
+    final content = picker
+        ? _pickerView()
+        : Row(
+            children: [
+              if (wide) SizedBox(width: 220, child: _sidebar()),
+              Expanded(
+                child: Column(
+                  children: [
+                    if (!picker && widget.cloud?.syncError != null)
+                      MaterialBanner(
+                        content: Text(
+                          widget.cloud!.syncError!,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        actions: [
+                          if (widget.cloud!.conflict != null) ...[
+                            TextButton(
+                              onPressed: () => unawaited(
+                                widget.cloud!.resolveConflict(
+                                  keepDevice: false,
+                                ),
+                              ),
+                              child: const Text('Use cloud'),
+                            ),
+                            TextButton(
+                              onPressed: () => unawaited(
+                                widget.cloud!.resolveConflict(keepDevice: true),
+                              ),
+                              child: const Text('Keep device'),
+                            ),
+                          ] else
+                            TextButton(
+                              onPressed: () =>
+                                  unawaited(widget.cloud!.syncNow()),
+                              child: const Text('Retry'),
+                            ),
+                        ],
+                      ),
+                    if (!picker)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                        child: SegmentedButton<int>(
+                          segments: const [
+                            ButtonSegment(
+                              value: 0,
+                              label: Text('Library'),
+                              icon: Icon(Icons.collections_outlined),
+                            ),
+                            ButtonSegment(
+                              value: 1,
+                              label: Text('GIPHY'),
+                              icon: Icon(Icons.search),
+                            ),
+                          ],
+                          selected: {giphyTab ? 1 : 0},
+                          onSelectionChanged: (v) => _switchMainTab(v.first),
+                        ),
+                      ),
+                    if (giphyTab && !picker)
+                      Expanded(child: _giphyView())
+                    else
+                      Expanded(child: _libraryView(wide)),
+                  ],
+                ),
+              ),
+            ],
+          );
     return Scaffold(
-      appBar: picker ? null : AppBar(
-        title: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.auto_awesome_mosaic_rounded, color: Color(0xFFBDA7FF)), SizedBox(width: 10), Text('Memlib', style: TextStyle(fontWeight: FontWeight.w700))]),
-        actions: [
-          _accountButton(),
-          if (Platform.isWindows) IconButton(tooltip: picker ? 'Open library' : 'Quick picker · ${hotkey.debugName}', icon: Icon(picker ? Icons.open_in_full : Icons.bolt), onPressed: () => _togglePicker()),
-          if (Platform.isWindows && !picker) PopupMenuButton<String>(tooltip: 'Settings', icon: const Icon(Icons.settings_outlined), onSelected: (value) {
-            if (value == 'shortcut') unawaited(_changeShortcut());
-            if (value == 'startup') unawaited(_toggleStartup());
-          }, itemBuilder: (_) => [
-            const PopupMenuItem(value: 'shortcut', child: Text('Change picker shortcut')),
-            CheckedPopupMenuItem(value: 'startup', checked: startupEnabled, child: const Text('Launch at sign-in')),
-          ]),
-          if (!picker) IconButton(tooltip: 'Import files', icon: const Icon(Icons.add_photo_alternate_outlined), onPressed: _import),
-        ],
-      ),
-      body: Platform.isWindows && !picker ? DropTarget(
-        onDragEntered: (_) => setState(() => draggingFiles = true),
-        onDragExited: (_) => setState(() => draggingFiles = false),
-        onDragDone: (details) {
-          setState(() => draggingFiles = false);
-          unawaited(_importPaths(details.files.map((file) => file.path).toList()));
-        },
-        child: Stack(children: [
-          content,
-          if (draggingFiles) Positioned.fill(child: IgnorePointer(child: ColoredBox(
-            color: const Color(0xE0181426),
-            child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-              const Icon(Icons.file_download_outlined, size: 60, color: Color(0xFFBDA7FF)),
-              const SizedBox(height: 12),
-              const Text('Drop images to import', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600)),
-              const SizedBox(height: 6),
-              Text(selectedFolder == null ? 'Into your library' : 'Into ${widget.store.folders.where((folder) => folder.id == selectedFolder).firstOrNull?.name ?? 'your library'}', style: const TextStyle(color: Colors.white70)),
-            ])),
-          ))),
-        ]),
-      ) : content,
+      appBar: picker
+          ? null
+          : AppBar(
+              title: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.auto_awesome_mosaic_rounded,
+                    color: Color(0xFFBDA7FF),
+                  ),
+                  SizedBox(width: 10),
+                  Text('Memlib', style: TextStyle(fontWeight: FontWeight.w700)),
+                ],
+              ),
+              actions: [
+                _accountButton(),
+                if (Platform.isWindows)
+                  IconButton(
+                    tooltip: picker
+                        ? 'Open library'
+                        : 'Quick picker · ${hotkey.debugName}',
+                    icon: Icon(picker ? Icons.open_in_full : Icons.bolt),
+                    onPressed: () => _togglePicker(),
+                  ),
+                if (Platform.isAndroid)
+                  PopupMenuButton<String>(
+                    tooltip: 'Android tools',
+                    icon: const Icon(Icons.keyboard_alt_outlined),
+                    onSelected: (value) {
+                      if (value == 'keyboard') unawaited(_showKeyboardSetup());
+                      if (value == 'paste') {
+                        unawaited(
+                          AndroidBridge.importClipboardImage().catchError((
+                            Object e,
+                          ) {
+                            _showError('Could not import clipboard image: $e');
+                          }),
+                        );
+                      }
+                    },
+                    itemBuilder: (_) => const [
+                      PopupMenuItem(
+                        value: 'keyboard',
+                        child: Text('Set up keyboard'),
+                      ),
+                      PopupMenuItem(
+                        value: 'paste',
+                        child: Text('Import image from clipboard'),
+                      ),
+                    ],
+                  ),
+                if (Platform.isWindows && !picker)
+                  PopupMenuButton<String>(
+                    tooltip: 'Settings',
+                    icon: const Icon(Icons.settings_outlined),
+                    onSelected: (value) {
+                      if (value == 'shortcut') unawaited(_changeShortcut());
+                      if (value == 'startup') unawaited(_toggleStartup());
+                    },
+                    itemBuilder: (_) => [
+                      const PopupMenuItem(
+                        value: 'shortcut',
+                        child: Text('Change picker shortcut'),
+                      ),
+                      CheckedPopupMenuItem(
+                        value: 'startup',
+                        checked: startupEnabled,
+                        child: const Text('Launch at sign-in'),
+                      ),
+                    ],
+                  ),
+                if (!picker)
+                  IconButton(
+                    tooltip: 'Import files',
+                    icon: const Icon(Icons.add_photo_alternate_outlined),
+                    onPressed: _import,
+                  ),
+              ],
+            ),
+      body: Platform.isWindows && !picker
+          ? DropTarget(
+              onDragEntered: (_) => setState(() => draggingFiles = true),
+              onDragExited: (_) => setState(() => draggingFiles = false),
+              onDragDone: (details) {
+                setState(() => draggingFiles = false);
+                unawaited(
+                  _importPaths(details.files.map((file) => file.path).toList()),
+                );
+              },
+              child: Stack(
+                children: [
+                  content,
+                  if (draggingFiles)
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: ColoredBox(
+                          color: const Color(0xE0181426),
+                          child: Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(
+                                  Icons.file_download_outlined,
+                                  size: 60,
+                                  color: Color(0xFFBDA7FF),
+                                ),
+                                const SizedBox(height: 12),
+                                const Text(
+                                  'Drop images to import',
+                                  style: TextStyle(
+                                    fontSize: 22,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  selectedFolder == null
+                                      ? 'Into your library'
+                                      : 'Into ${widget.store.folders.where((folder) => folder.id == selectedFolder).firstOrNull?.name ?? 'your library'}',
+                                  style: const TextStyle(color: Colors.white70),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            )
+          : content,
     );
   }
 
   Widget _pickerView() {
     final items = visibleItems;
     return DecoratedBox(
-      decoration: BoxDecoration(color: const Color(0xFF1A1623), border: Border.all(color: const Color(0xFF514462))),
-      child: Column(children: [
-        Padding(padding: const EdgeInsets.fromLTRB(16, 8, 8, 2), child: Row(children: [
-          const Icon(Icons.bolt, color: Color(0xFFBDA7FF), size: 20),
-          const SizedBox(width: 8),
-          const Expanded(child: Text('Memlib', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700))),
-          IconButton(tooltip: 'Open library', icon: const Icon(Icons.open_in_full, size: 18), onPressed: _openLibrary),
-          IconButton(tooltip: 'Close popup', icon: const Icon(Icons.close, size: 18), onPressed: _dismissPicker),
-        ])),
-        Padding(padding: const EdgeInsets.fromLTRB(14, 4, 14, 10), child: Row(children: [
-          ChoiceChip(label: const Text('Your library'), avatar: const Icon(Icons.collections_outlined, size: 16), selected: !giphyTab, onSelected: (_) => _switchTab(false)),
-          const SizedBox(width: 8),
-          ChoiceChip(label: const Text('GIPHY'), avatar: const Icon(Icons.search, size: 16), selected: giphyTab, onSelected: (_) => _switchTab(true)),
-        ])),
-        if (giphyTab) Expanded(child: _giphyView(compact: true)) else ...[
-        Padding(padding: const EdgeInsets.fromLTRB(14, 2, 14, 10), child: TextField(
-          focusNode: searchFocus,
-          controller: searchController,
-          onChanged: (_) => setState(() => selectedIndex = 0),
-          decoration: InputDecoration(
-            prefixIcon: const Icon(Icons.search), hintText: 'Find a sticker or GIF',
-            isDense: true, filled: true, fillColor: const Color(0xFF2A2435),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1623),
+        border: Border.all(color: const Color(0xFF514462)),
+      ),
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 8, 2),
+            child: Row(
+              children: [
+                const Icon(Icons.bolt, color: Color(0xFFBDA7FF), size: 20),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'Memlib',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Open library',
+                  icon: const Icon(Icons.open_in_full, size: 18),
+                  onPressed: _openLibrary,
+                ),
+                IconButton(
+                  tooltip: 'Close popup',
+                  icon: const Icon(Icons.close, size: 18),
+                  onPressed: _dismissPicker,
+                ),
+              ],
+            ),
           ),
-        )),
-        SizedBox(height: 42, child: ListView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 14), children: [
-          ChoiceChip(label: const Text('All'), selected: selectedFolder == null && !favoritesOnly, onSelected: (_) => setState(() { selectedFolder = null; favoritesOnly = false; selectedIndex = 0; })),
-          const SizedBox(width: 7),
-          ChoiceChip(label: const Text('★ Favourites'), selected: favoritesOnly, onSelected: (_) => setState(() { selectedFolder = null; favoritesOnly = true; selectedIndex = 0; })),
-          ...widget.store.folders.map((folder) => Padding(padding: const EdgeInsets.only(left: 7), child: ChoiceChip(label: Text(folder.name), selected: selectedFolder == folder.id, onSelected: (_) => setState(() { selectedFolder = folder.id; favoritesOnly = false; selectedIndex = 0; })))),
-        ])),
-        const SizedBox(height: 8),
-        Expanded(child: items.isEmpty
-          ? const Center(child: Text('No matching items', style: TextStyle(color: Colors.white60)))
-          : GridView.builder(
-              padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 4, childAspectRatio: 1.0, crossAxisSpacing: 10, mainAxisSpacing: 10),
-              itemCount: items.length,
-              itemBuilder: (context, index) => _itemCard(items[index], selected: index == selectedIndex),
-            )),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 4, 14, 10),
+            child: Row(
+              children: [
+                ChoiceChip(
+                  label: const Text('Your library'),
+                  avatar: const Icon(Icons.collections_outlined, size: 16),
+                  selected: !giphyTab,
+                  onSelected: (_) => _switchTab(false),
+                ),
+                const SizedBox(width: 8),
+                ChoiceChip(
+                  label: const Text('GIPHY'),
+                  avatar: const Icon(Icons.search, size: 16),
+                  selected: giphyTab,
+                  onSelected: (_) => _switchTab(true),
+                ),
+              ],
+            ),
+          ),
+          if (giphyTab)
+            Expanded(child: _giphyView(compact: true))
+          else ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 2, 14, 10),
+              child: TextField(
+                focusNode: searchFocus,
+                controller: searchController,
+                onChanged: (_) => setState(() => selectedIndex = 0),
+                decoration: InputDecoration(
+                  prefixIcon: const Icon(Icons.search),
+                  hintText: 'Find a sticker or GIF',
+                  isDense: true,
+                  filled: true,
+                  fillColor: const Color(0xFF2A2435),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+              ),
+            ),
+            SizedBox(
+              height: 42,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                children: [
+                  ChoiceChip(
+                    label: const Text('All'),
+                    selected: selectedFolder == null && !favoritesOnly,
+                    onSelected: (_) => setState(() {
+                      selectedFolder = null;
+                      favoritesOnly = false;
+                      selectedIndex = 0;
+                    }),
+                  ),
+                  const SizedBox(width: 7),
+                  ChoiceChip(
+                    label: const Text('★ Favourites'),
+                    selected: favoritesOnly,
+                    onSelected: (_) => setState(() {
+                      selectedFolder = null;
+                      favoritesOnly = true;
+                      selectedIndex = 0;
+                    }),
+                  ),
+                  ...widget.store.folders.map(
+                    (folder) => Padding(
+                      padding: const EdgeInsets.only(left: 7),
+                      child: ChoiceChip(
+                        label: Text(folder.name),
+                        selected: selectedFolder == folder.id,
+                        onSelected: (_) => setState(() {
+                          selectedFolder = folder.id;
+                          favoritesOnly = false;
+                          selectedIndex = 0;
+                        }),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: items.isEmpty
+                  ? const Center(
+                      child: Text(
+                        'No matching items',
+                        style: TextStyle(color: Colors.white60),
+                      ),
+                    )
+                  : GridView.builder(
+                      padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 4,
+                            childAspectRatio: 1.0,
+                            crossAxisSpacing: 10,
+                            mainAxisSpacing: 10,
+                          ),
+                      itemCount: items.length,
+                      itemBuilder: (context, index) => _itemCard(
+                        items[index],
+                        selected: index == selectedIndex,
+                      ),
+                    ),
+            ),
+          ],
+          const Divider(height: 1),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Text(
+              giphyTab
+                  ? 'Search GIPHY   ·   Arrow keys to move   ·   Enter to paste   ·   Esc to close'
+                  : 'Type to search   ·   Arrow keys to move   ·   Enter to paste   ·   Esc to close',
+              style: const TextStyle(fontSize: 11, color: Colors.white54),
+            ),
+          ),
         ],
-        const Divider(height: 1),
-        Padding(padding: const EdgeInsets.symmetric(vertical: 8), child: Text(giphyTab ? 'Search GIPHY   ·   Arrow keys to move   ·   Enter to paste   ·   Esc to close' : 'Type to search   ·   Arrow keys to move   ·   Enter to paste   ·   Esc to close', style: const TextStyle(fontSize: 11, color: Colors.white54))),
-      ]),
+      ),
     );
   }
 
   Widget _sidebar() => Material(
     color: const Color(0xFF1C1924),
-    child: Column(children: [
-      ListTile(leading: const Icon(Icons.grid_view), title: const Text('All items'), selected: selectedFolder == null && !favoritesOnly, onTap: () => setState(() { selectedFolder = null; favoritesOnly = false; })),
-      ListTile(leading: const Icon(Icons.star_outline), title: const Text('Favourites'), selected: favoritesOnly, onTap: () => setState(() { selectedFolder = null; favoritesOnly = true; })),
-      const Divider(),
-      Padding(padding: const EdgeInsets.only(left: 16, right: 4), child: Row(children: [const Expanded(child: Text('FOLDERS')), IconButton(tooltip: 'New folder', icon: const Icon(Icons.add), onPressed: () async { final name = await _askName('New folder'); if (name != null) await widget.store.addFolder(name); })])),
-      Expanded(child: ListView(children: widget.store.folders.map((folder) => ListTile(
-        leading: const Icon(Icons.folder_outlined), title: Text(folder.name, maxLines: 1, overflow: TextOverflow.ellipsis), selected: selectedFolder == folder.id,
-        onTap: () => setState(() { selectedFolder = folder.id; favoritesOnly = false; }),
-        trailing: PopupMenuButton<String>(onSelected: (action) async {
-          if (action == 'rename') { final name = await _askName('Rename folder', initial: folder.name); if (name != null) await widget.store.renameFolder(folder, name); }
-          if (action == 'delete') await widget.store.deleteFolder(folder);
-        }, itemBuilder: (_) => const [PopupMenuItem(value: 'rename', child: Text('Rename')), PopupMenuItem(value: 'delete', child: Text('Remove folder; keep items'))]),
-      )).toList())),
-    ]),
+    child: Column(
+      children: [
+        ListTile(
+          leading: const Icon(Icons.grid_view),
+          title: const Text('All items'),
+          selected: selectedFolder == null && !favoritesOnly,
+          onTap: () => setState(() {
+            selectedFolder = null;
+            favoritesOnly = false;
+          }),
+        ),
+        ListTile(
+          leading: const Icon(Icons.star_outline),
+          title: const Text('Favourites'),
+          selected: favoritesOnly,
+          onTap: () => setState(() {
+            selectedFolder = null;
+            favoritesOnly = true;
+          }),
+        ),
+        const Divider(),
+        Padding(
+          padding: const EdgeInsets.only(left: 16, right: 4),
+          child: Row(
+            children: [
+              const Expanded(child: Text('FOLDERS')),
+              IconButton(
+                tooltip: 'New folder',
+                icon: const Icon(Icons.add),
+                onPressed: () async {
+                  final name = await _askName('New folder');
+                  if (name != null) await widget.store.addFolder(name);
+                },
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: ListView(
+            children: widget.store.folders
+                .map(
+                  (folder) => ListTile(
+                    leading: const Icon(Icons.folder_outlined),
+                    title: Text(
+                      folder.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    selected: selectedFolder == folder.id,
+                    onTap: () => setState(() {
+                      selectedFolder = folder.id;
+                      favoritesOnly = false;
+                    }),
+                    trailing: PopupMenuButton<String>(
+                      onSelected: (action) async {
+                        if (action == 'rename') {
+                          final name = await _askName(
+                            'Rename folder',
+                            initial: folder.name,
+                          );
+                          if (name != null) {
+                            await widget.store.renameFolder(folder, name);
+                          }
+                        }
+                        if (action == 'delete') {
+                          await widget.store.deleteFolder(folder);
+                        }
+                      },
+                      itemBuilder: (_) => const [
+                        PopupMenuItem(value: 'rename', child: Text('Rename')),
+                        PopupMenuItem(
+                          value: 'delete',
+                          child: Text('Remove folder; keep items'),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+                .toList(),
+          ),
+        ),
+      ],
+    ),
   );
 
-  Widget _libraryView(bool wide) => Column(children: [
-    Padding(padding: const EdgeInsets.fromLTRB(16, 12, 16, 0), child: Row(children: [
-      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(selectedFolder == null ? favoritesOnly ? 'Favourites' : 'Your library' : widget.store.folders.where((folder) => folder.id == selectedFolder).firstOrNull?.name ?? 'Your library', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700)),
-        const SizedBox(height: 3),
-        Text('${visibleItems.length} ${visibleItems.length == 1 ? 'item' : 'items'}${selectedFolder == null && !favoritesOnly ? ' · GIFs and stickers ready to share' : ''}', style: const TextStyle(color: Colors.white60, fontSize: 12)),
-      ])),
-      if (wide) FilledButton.icon(onPressed: _import, icon: const Icon(Icons.add_photo_alternate_outlined), label: const Text('Import')),
-    ])),
-    if (!wide) SizedBox(height: 52, child: ListView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 12), children: [
-      ChoiceChip(label: const Text('All'), selected: selectedFolder == null && !favoritesOnly, onSelected: (_) => setState(() { selectedFolder = null; favoritesOnly = false; })),
-      const SizedBox(width: 8), ChoiceChip(label: const Text('★ Favourites'), selected: favoritesOnly, onSelected: (_) => setState(() { selectedFolder = null; favoritesOnly = true; })),
-      ...widget.store.folders.map((folder) => Padding(padding: const EdgeInsets.only(left: 8), child: ChoiceChip(label: Text(folder.name), selected: selectedFolder == folder.id, onSelected: (_) => setState(() { selectedFolder = folder.id; favoritesOnly = false; })))),
-      if (!picker) IconButton(tooltip: 'New folder', onPressed: () async { final name = await _askName('New folder'); if (name != null) await widget.store.addFolder(name); }, icon: const Icon(Icons.create_new_folder_outlined)),
-    ])),
-    Padding(padding: const EdgeInsets.all(16), child: TextField(focusNode: searchFocus, controller: searchController, onChanged: (_) => setState(() {}), decoration: InputDecoration(prefixIcon: const Icon(Icons.search), hintText: 'Search your library', border: OutlineInputBorder(borderRadius: BorderRadius.circular(14))))),
-    Expanded(child: visibleItems.isEmpty ? Center(child: SingleChildScrollView(child: Padding(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [
-      Container(width: 92, height: 92, decoration: BoxDecoration(color: const Color(0xFF2D2540), borderRadius: BorderRadius.circular(26)), child: const Icon(Icons.collections_bookmark_outlined, size: 46, color: Color(0xFFBDA7FF))),
-      const SizedBox(height: 18),
-      Text(widget.store.items.isEmpty ? 'Build your collection' : 'Nothing found', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
-      const SizedBox(height: 6),
-      Text(widget.store.items.isEmpty ? 'Import GIFs and stickers, then reach them from anywhere with the quick picker.' : 'Try another search or choose a different folder.', textAlign: TextAlign.center, style: const TextStyle(color: Colors.white60)),
-      const SizedBox(height: 18),
-      FilledButton.icon(onPressed: _import, icon: const Icon(Icons.add_photo_alternate_outlined), label: const Text('Import images')),
-      if (Platform.isWindows) const Padding(padding: EdgeInsets.only(top: 10), child: Text('Drop images here, or copy image files in Explorer and press Ctrl+V', style: TextStyle(color: Colors.white54, fontSize: 12))),
-    ])))) : GridView.builder(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-      gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(maxCrossAxisExtent: picker ? 140 : 180, childAspectRatio: 0.85, crossAxisSpacing: 12, mainAxisSpacing: 12),
-      itemCount: visibleItems.length,
-      itemBuilder: (context, index) => _itemCard(visibleItems[index]),
-    )),
-    if (picker && Platform.isWindows) const Padding(padding: EdgeInsets.all(8), child: Text('Ctrl+Alt+V · Tap an item to paste into the previous app', style: TextStyle(color: Colors.white54, fontSize: 12))),
-  ]);
+  Widget _libraryView(bool wide) => Column(
+    children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    selectedFolder == null
+                        ? favoritesOnly
+                              ? 'Favourites'
+                              : 'Your library'
+                        : widget.store.folders
+                                  .where(
+                                    (folder) => folder.id == selectedFolder,
+                                  )
+                                  .firstOrNull
+                                  ?.name ??
+                              'Your library',
+                    style: const TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    '${visibleItems.length} ${visibleItems.length == 1 ? 'item' : 'items'}${selectedFolder == null && !favoritesOnly ? ' · GIFs and stickers ready to share' : ''}',
+                    style: const TextStyle(color: Colors.white60, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+            if (wide)
+              FilledButton.icon(
+                onPressed: _import,
+                icon: const Icon(Icons.add_photo_alternate_outlined),
+                label: const Text('Import'),
+              ),
+          ],
+        ),
+      ),
+      if (!wide)
+        SizedBox(
+          height: 52,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            children: [
+              ChoiceChip(
+                label: const Text('All'),
+                selected: selectedFolder == null && !favoritesOnly,
+                onSelected: (_) => setState(() {
+                  selectedFolder = null;
+                  favoritesOnly = false;
+                }),
+              ),
+              const SizedBox(width: 8),
+              ChoiceChip(
+                label: const Text('★ Favourites'),
+                selected: favoritesOnly,
+                onSelected: (_) => setState(() {
+                  selectedFolder = null;
+                  favoritesOnly = true;
+                }),
+              ),
+              ...widget.store.folders.map(
+                (folder) => Padding(
+                  padding: const EdgeInsets.only(left: 8),
+                  child: ChoiceChip(
+                    label: Text(folder.name),
+                    selected: selectedFolder == folder.id,
+                    onSelected: (_) => setState(() {
+                      selectedFolder = folder.id;
+                      favoritesOnly = false;
+                    }),
+                  ),
+                ),
+              ),
+              if (!picker)
+                IconButton(
+                  tooltip: 'New folder',
+                  onPressed: () async {
+                    final name = await _askName('New folder');
+                    if (name != null) await widget.store.addFolder(name);
+                  },
+                  icon: const Icon(Icons.create_new_folder_outlined),
+                ),
+            ],
+          ),
+        ),
+      Padding(
+        padding: const EdgeInsets.all(16),
+        child: TextField(
+          focusNode: searchFocus,
+          controller: searchController,
+          onChanged: (_) => setState(() {}),
+          decoration: InputDecoration(
+            prefixIcon: const Icon(Icons.search),
+            hintText: 'Search your library',
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+        ),
+      ),
+      Expanded(
+        child: visibleItems.isEmpty
+            ? Center(
+                child: SingleChildScrollView(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 92,
+                          height: 92,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF2D2540),
+                            borderRadius: BorderRadius.circular(26),
+                          ),
+                          child: const Icon(
+                            Icons.collections_bookmark_outlined,
+                            size: 46,
+                            color: Color(0xFFBDA7FF),
+                          ),
+                        ),
+                        const SizedBox(height: 18),
+                        Text(
+                          widget.store.items.isEmpty
+                              ? 'Build your collection'
+                              : 'Nothing found',
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          widget.store.items.isEmpty
+                              ? Platform.isAndroid
+                                    ? 'Import GIFs and stickers, then reach them from any text field with the Memlib keyboard.'
+                                    : 'Import GIFs and stickers, then reach them from anywhere with the quick picker.'
+                              : 'Try another search or choose a different folder.',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Colors.white60),
+                        ),
+                        const SizedBox(height: 18),
+                        FilledButton.icon(
+                          onPressed: _import,
+                          icon: const Icon(Icons.add_photo_alternate_outlined),
+                          label: const Text('Import images'),
+                        ),
+                        if (Platform.isWindows)
+                          const Padding(
+                            padding: EdgeInsets.only(top: 10),
+                            child: Text(
+                              'Drop images here, or copy image files in Explorer and press Ctrl+V',
+                              style: TextStyle(
+                                color: Colors.white54,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              )
+            : GridView.builder(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+                gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: picker ? 140 : 180,
+                  childAspectRatio: 0.85,
+                  crossAxisSpacing: 12,
+                  mainAxisSpacing: 12,
+                ),
+                itemCount: visibleItems.length,
+                itemBuilder: (context, index) => _itemCard(visibleItems[index]),
+              ),
+      ),
+      if (picker && Platform.isWindows)
+        const Padding(
+          padding: EdgeInsets.all(8),
+          child: Text(
+            'Ctrl+Alt+V · Tap an item to paste into the previous app',
+            style: TextStyle(color: Colors.white54, fontSize: 12),
+          ),
+        ),
+    ],
+  );
 
-  Widget _itemCard(LibraryItem item, {bool selected = false}) => Card(key: picker ? GlobalObjectKey('picker-${item.id}') : null, clipBehavior: Clip.antiAlias, margin: EdgeInsets.zero, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: selected ? const Color(0xFFBDA7FF) : Colors.transparent, width: selected ? 2 : 0)), child: InkWell(
-    onTap: () => _useItem(item),
-    child: Column(children: [
-      Expanded(child: Stack(fit: StackFit.expand, children: [
-        Padding(padding: const EdgeInsets.all(8), child: Image.file(widget.store.fileFor(item), fit: BoxFit.contain, errorBuilder: (_, _, _) => const Icon(Icons.broken_image_outlined))),
-        Positioned(top: 2, right: 2, child: IconButton.filledTonal(tooltip: item.favorite ? 'Remove favourite' : 'Add favourite', iconSize: 18, icon: Icon(item.favorite ? Icons.star : Icons.star_border), onPressed: () => widget.store.updateItem(item, favorite: !item.favorite))),
-      ])),
-      Padding(padding: const EdgeInsets.only(left: 10), child: Row(children: [Expanded(child: Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis)), if (!picker) PopupMenuButton<String>(tooltip: 'Item options', onSelected: (action) async {
-        if (action == 'rename') { final name = await _askName('Rename item', initial: item.name); if (name != null) await widget.store.updateItem(item, name: name); }
-        if (action == 'delete') await widget.store.deleteItem(item);
-        if (action == 'source' && item.sourcePage != null) { await Clipboard.setData(ClipboardData(text: item.sourcePage!)); _showError('Source link copied · ${item.licenseLabel ?? 'Open license'}'); }
-        if (action.startsWith('move:')) await widget.store.updateItem(item, move: true, folderId: action.substring(5).isEmpty ? null : action.substring(5));
-      }, itemBuilder: (_) => [const PopupMenuItem(value: 'rename', child: Text('Rename')), if (item.sourcePage != null) PopupMenuItem(value: 'source', child: Text('Copy source · ${item.licenseLabel ?? 'Open license'}')), const PopupMenuItem(value: 'move:', child: Text('Move to All items')), ...widget.store.folders.map((folder) => PopupMenuItem(value: 'move:${folder.id}', child: Text('Move to ${folder.name}'))), const PopupMenuItem(value: 'delete', child: Text('Delete'))])])),
-    ]),
-  ));
+  Widget _itemCard(LibraryItem item, {bool selected = false}) => Card(
+    key: picker ? GlobalObjectKey('picker-${item.id}') : null,
+    clipBehavior: Clip.antiAlias,
+    margin: EdgeInsets.zero,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(12),
+      side: BorderSide(
+        color: selected ? const Color(0xFFBDA7FF) : Colors.transparent,
+        width: selected ? 2 : 0,
+      ),
+    ),
+    child: InkWell(
+      onTap: () => _useItem(item),
+      child: Column(
+        children: [
+          Expanded(
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: Image.file(
+                    widget.store.fileFor(item),
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, _, _) =>
+                        const Icon(Icons.broken_image_outlined),
+                  ),
+                ),
+                if (item.sourceType == 'giphy')
+                  const Positioned(
+                    left: 5,
+                    bottom: 5,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Color(0xD91B1724),
+                        borderRadius: BorderRadius.all(Radius.circular(5)),
+                      ),
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 5,
+                          vertical: 2,
+                        ),
+                        child: Text(
+                          'GIPHY',
+                          style: TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                Positioned(
+                  top: 2,
+                  right: 2,
+                  child: IconButton.filledTonal(
+                    tooltip: item.favorite
+                        ? 'Remove favourite'
+                        : 'Add favourite',
+                    iconSize: 18,
+                    icon: Icon(item.favorite ? Icons.star : Icons.star_border),
+                    onPressed: () =>
+                        widget.store.updateItem(item, favorite: !item.favorite),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(left: 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    item.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (!picker)
+                  PopupMenuButton<String>(
+                    tooltip: 'Item options',
+                    onSelected: (action) async {
+                      if (action == 'rename') {
+                        final name = await _askName(
+                          'Rename item',
+                          initial: item.name,
+                        );
+                        if (name != null) {
+                          await widget.store.updateItem(item, name: name);
+                        }
+                      }
+                      if (action == 'delete') {
+                        await widget.store.deleteItem(item);
+                      }
+                      if (action == 'source' && item.sourcePage != null) {
+                        await Clipboard.setData(
+                          ClipboardData(text: item.sourcePage!),
+                        );
+                        _showError('Source link copied');
+                      }
+                      if (action == 'share' && Platform.isAndroid) {
+                        await AndroidBridge.shareFile(
+                          widget.store.fileFor(item),
+                        );
+                      }
+                      if (action.startsWith('move:')) {
+                        await widget.store.updateItem(
+                          item,
+                          move: true,
+                          folderId: action.substring(5).isEmpty
+                              ? null
+                              : action.substring(5),
+                        );
+                      }
+                    },
+                    itemBuilder: (_) => [
+                      const PopupMenuItem(
+                        value: 'rename',
+                        child: Text('Rename'),
+                      ),
+                      if (Platform.isAndroid)
+                        const PopupMenuItem(
+                          value: 'share',
+                          child: Text('Share to another app'),
+                        ),
+                      if (item.sourcePage != null)
+                        const PopupMenuItem(
+                          value: 'source',
+                          child: Text('Copy source link'),
+                        ),
+                      const PopupMenuItem(
+                        value: 'move:',
+                        child: Text('Move to All items'),
+                      ),
+                      ...widget.store.folders.map(
+                        (folder) => PopupMenuItem(
+                          value: 'move:${folder.id}',
+                          child: Text('Move to ${folder.name}'),
+                        ),
+                      ),
+                      const PopupMenuItem(
+                        value: 'delete',
+                        child: Text('Delete'),
+                      ),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 
-  Widget _giphyView({bool compact = false}) => Column(children: [
-    Padding(padding: EdgeInsets.fromLTRB(compact ? 14 : 16, 0, compact ? 14 : 16, 10), child: Row(children: [
-      Expanded(child: TextField(
-        focusNode: giphyFocus,
-        controller: giphyController,
-        textInputAction: TextInputAction.search,
-        onChanged: (_) => giphyNavigating = false,
-        onSubmitted: (_) => _searchGiphy(),
-        decoration: InputDecoration(prefixIcon: const Icon(Icons.search), hintText: 'Search GIPHY', isDense: compact, border: OutlineInputBorder(borderRadius: BorderRadius.circular(14))),
-      )),
-      const SizedBox(width: 8),
-      FilledButton(onPressed: busy || !giphy.configured ? null : () => _searchGiphy(), child: const Text('Search')),
-    ])),
-    Padding(padding: EdgeInsets.symmetric(horizontal: compact ? 14 : 16), child: Row(children: [
-      ChoiceChip(label: const Text('GIFs'), selected: !stickerSearch, onSelected: busy ? null : (_) { setState(() => stickerSearch = false); if (giphyController.text.trim().isNotEmpty) _searchGiphy(); }),
-      const SizedBox(width: 8),
-      ChoiceChip(label: const Text('Stickers'), selected: stickerSearch, onSelected: busy ? null : (_) { setState(() => stickerSearch = true); if (giphyController.text.trim().isNotEmpty) _searchGiphy(); }),
-      const Spacer(),
-      const Text('Powered by GIPHY', style: TextStyle(fontSize: 12, color: Colors.white70)),
-    ])),
-    const SizedBox(height: 8),
-    if (busy) const LinearProgressIndicator(minHeight: 2),
-    if (error != null) Padding(padding: const EdgeInsets.all(12), child: Text(error!, style: const TextStyle(color: Colors.redAccent))),
-    if (!compact) Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: Align(alignment: Alignment.centerRight, child: TextButton.icon(onPressed: () => _switchMainTab(2), icon: const Icon(Icons.download_outlined, size: 18), label: const Text('Find GIFs you can save')))),
-    Expanded(child: !giphy.configured
-      ? const Center(child: Padding(padding: EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.key_outlined, size: 42, color: Colors.white54), SizedBox(height: 12), Text('Add a GIPHY API key to search', style: TextStyle(fontSize: 16)), SizedBox(height: 6), Text('See README.md for setup', style: TextStyle(color: Colors.white60))])))
-      : results.isEmpty
-        ? Center(child: Text(busy ? 'Searching GIPHY…' : giphyQuery.isEmpty ? 'Search for a reaction or sticker' : 'No results found', style: const TextStyle(color: Colors.white60)))
-        : GridView.builder(
-            padding: EdgeInsets.fromLTRB(compact ? 14 : 16, 4, compact ? 14 : 16, 12),
-            gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(maxCrossAxisExtent: compact ? 145 : 180, childAspectRatio: 0.94, crossAxisSpacing: 10, mainAxisSpacing: 10),
-            itemCount: results.length,
-            itemBuilder: (context, index) {
-              final item = results[index];
-              final selected = compact && index == selectedIndex;
-              return Card(
-                key: compact ? GlobalObjectKey('giphy-${item.id}') : null,
-                clipBehavior: Clip.antiAlias,
-                margin: EdgeInsets.zero,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: selected ? const Color(0xFFBDA7FF) : Colors.transparent, width: selected ? 2 : 0)),
-                child: InkWell(onTap: busy ? null : () => _useGiphy(item), child: Column(children: [
-                  Expanded(child: Image.network(item.previewUrl, fit: BoxFit.cover, width: double.infinity, frameBuilder: (context, child, frame, loadedSynchronously) {
-                    if ((frame != null || loadedSynchronously) && seenGiphy.add(item.id)) unawaited(giphy.track(item, GiphyAction.load));
-                    return child;
-                  }, errorBuilder: (_, _, _) => const Center(child: Icon(Icons.broken_image_outlined)))),
-                  Padding(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5), child: Text(item.title.isEmpty ? 'GIPHY' : item.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11))),
-                ])),
-              );
-            },
-          )),
-    if (giphyHasMore && results.isNotEmpty) Padding(padding: const EdgeInsets.only(bottom: 8), child: TextButton.icon(onPressed: busy ? null : () => _searchGiphy(more: true), icon: const Icon(Icons.expand_more), label: const Text('More results'))),
-  ]);
+  Widget _giphyView({bool compact = false}) => Column(
+    children: [
+      Padding(
+        padding: EdgeInsets.fromLTRB(
+          compact ? 14 : 16,
+          0,
+          compact ? 14 : 16,
+          10,
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: TextField(
+                focusNode: giphyFocus,
+                controller: giphyController,
+                textInputAction: TextInputAction.search,
+                onChanged: (_) => giphyNavigating = false,
+                onSubmitted: (_) => _searchGiphy(),
+                decoration: InputDecoration(
+                  prefixIcon: const Icon(Icons.search),
+                  hintText: 'Search GIPHY',
+                  isDense: compact,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            FilledButton(
+              onPressed: busy || !giphy.configured
+                  ? null
+                  : () => _searchGiphy(),
+              child: const Text('Search'),
+            ),
+          ],
+        ),
+      ),
+      Padding(
+        padding: EdgeInsets.symmetric(horizontal: compact ? 14 : 16),
+        child: Row(
+          children: [
+            ChoiceChip(
+              label: const Text('GIFs'),
+              selected: !stickerSearch,
+              onSelected: busy
+                  ? null
+                  : (_) {
+                      setState(() => stickerSearch = false);
+                      if (giphyController.text.trim().isNotEmpty) {
+                        _searchGiphy();
+                      }
+                    },
+            ),
+            const SizedBox(width: 8),
+            ChoiceChip(
+              label: const Text('Stickers'),
+              selected: stickerSearch,
+              onSelected: busy
+                  ? null
+                  : (_) {
+                      setState(() => stickerSearch = true);
+                      if (giphyController.text.trim().isNotEmpty) {
+                        _searchGiphy();
+                      }
+                    },
+            ),
+            const Spacer(),
+            const Text(
+              'Powered by GIPHY',
+              style: TextStyle(fontSize: 12, color: Colors.white70),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 8),
+      if (busy) const LinearProgressIndicator(minHeight: 2),
+      if (error != null)
+        Padding(
+          padding: const EdgeInsets.all(12),
+          child: Text(error!, style: const TextStyle(color: Colors.redAccent)),
+        ),
+      if (!compact && !GiphyService.librarySavesEnabled)
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 5),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              'Saving to the library will unlock after GIPHY permission is enabled for this build.',
+              style: TextStyle(fontSize: 12, color: Colors.white60),
+            ),
+          ),
+        ),
+      Expanded(
+        child: !giphy.configured
+            ? const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.key_outlined, size: 42, color: Colors.white54),
+                      SizedBox(height: 12),
+                      Text(
+                        'Add a GIPHY API key to search',
+                        style: TextStyle(fontSize: 16),
+                      ),
+                      SizedBox(height: 6),
+                      Text(
+                        'See README.md for setup',
+                        style: TextStyle(color: Colors.white60),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            : results.isEmpty
+            ? Center(
+                child: Text(
+                  busy
+                      ? 'Searching GIPHY…'
+                      : giphyQuery.isEmpty
+                      ? 'Search for a reaction or sticker'
+                      : 'No results found',
+                  style: const TextStyle(color: Colors.white60),
+                ),
+              )
+            : GridView.builder(
+                padding: EdgeInsets.fromLTRB(
+                  compact ? 14 : 16,
+                  4,
+                  compact ? 14 : 16,
+                  12,
+                ),
+                gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: compact ? 145 : 180,
+                  childAspectRatio: 0.94,
+                  crossAxisSpacing: 10,
+                  mainAxisSpacing: 10,
+                ),
+                itemCount: results.length,
+                itemBuilder: (context, index) {
+                  final item = results[index];
+                  final selected = compact && index == selectedIndex;
+                  final saved = giphyLibrary.savedItem(item);
+                  final saving = savingGiphy.contains(item.id);
+                  return Card(
+                    key: compact ? GlobalObjectKey('giphy-${item.id}') : null,
+                    clipBehavior: Clip.antiAlias,
+                    margin: EdgeInsets.zero,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: BorderSide(
+                        color: selected
+                            ? const Color(0xFFBDA7FF)
+                            : Colors.transparent,
+                        width: selected ? 2 : 0,
+                      ),
+                    ),
+                    child: InkWell(
+                      onTap: busy ? null : () => _useGiphy(item),
+                      child: Column(
+                        children: [
+                          Expanded(
+                            child: Image.network(
+                              item.previewUrl,
+                              fit: BoxFit.cover,
+                              width: double.infinity,
+                              frameBuilder:
+                                  (context, child, frame, loadedSynchronously) {
+                                    if ((frame != null ||
+                                            loadedSynchronously) &&
+                                        seenGiphy.add(item.id)) {
+                                      unawaited(
+                                        giphy.track(item, GiphyAction.load),
+                                      );
+                                    }
+                                    return child;
+                                  },
+                              errorBuilder: (_, _, _) => const Center(
+                                child: Icon(Icons.broken_image_outlined),
+                              ),
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.only(left: 8, right: 4),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    item.title.isEmpty ? 'GIPHY' : item.title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 11),
+                                  ),
+                                ),
+                                if (!compact &&
+                                    GiphyService.librarySavesEnabled) ...[
+                                  IconButton(
+                                    tooltip: saved == null
+                                        ? 'Save to library'
+                                        : 'Saved to library',
+                                    visualDensity: VisualDensity.compact,
+                                    iconSize: 19,
+                                    onPressed: saving || busy || saved != null
+                                        ? null
+                                        : () => _saveGiphy(item),
+                                    icon: Icon(
+                                      saved == null
+                                          ? Icons.download_outlined
+                                          : Icons.check_circle_outline,
+                                    ),
+                                  ),
+                                  IconButton(
+                                    tooltip: saved?.favorite == true
+                                        ? 'Remove favourite'
+                                        : 'Add favourite',
+                                    visualDensity: VisualDensity.compact,
+                                    iconSize: 19,
+                                    onPressed: saving || busy
+                                        ? null
+                                        : () => _saveGiphy(
+                                            item,
+                                            toggleFavorite: true,
+                                          ),
+                                    icon: Icon(
+                                      saved?.favorite == true
+                                          ? Icons.star
+                                          : Icons.star_border,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+      ),
+      if (giphyHasMore && results.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: TextButton.icon(
+            onPressed: busy ? null : () => _searchGiphy(more: true),
+            icon: const Icon(Icons.expand_more),
+            label: const Text('More results'),
+          ),
+        ),
+    ],
+  );
 }
 
 class _NameDialog extends StatefulWidget {
@@ -815,8 +2070,14 @@ class _NameDialogState extends State<_NameDialog> {
       onSubmitted: (_) => Navigator.pop(context, controller.text),
     ),
     actions: [
-      TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-      FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('Save')),
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Cancel'),
+      ),
+      FilledButton(
+        onPressed: () => Navigator.pop(context, controller.text),
+        child: const Text('Save'),
+      ),
     ],
   );
 }
