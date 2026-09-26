@@ -142,6 +142,13 @@ class LibraryScreen extends StatefulWidget {
   State<LibraryScreen> createState() => _LibraryScreenState();
 }
 
+class _LibraryDrag {
+  const _LibraryDrag.item(this.id) : folder = false;
+  const _LibraryDrag.folder(this.id) : folder = true;
+  final String id;
+  final bool folder;
+}
+
 class _LibraryScreenState extends State<LibraryScreen>
     with WindowListener, WidgetsBindingObserver {
   final actions = MediaActions();
@@ -153,6 +160,7 @@ class _LibraryScreenState extends State<LibraryScreen>
   final searchFocus = FocusNode();
   final giphyFocus = FocusNode();
   String? selectedFolder;
+  final expandedFolders = <String>{};
   bool favoritesOnly = false;
   bool picker = false;
   bool giphyTab = false;
@@ -853,12 +861,131 @@ class _LibraryScreenState extends State<LibraryScreen>
     }
   }
 
+  LibraryFolder? get currentFolder => widget.store.folders
+      .where((folder) => folder.id == selectedFolder)
+      .firstOrNull;
+
+  List<LibraryFolder> foldersIn(String? parentId) {
+    final folders = widget.store.folders
+        .where((folder) => folder.parentId == parentId)
+        .toList();
+    folders.sort(
+      (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+    );
+    return folders;
+  }
+
+  List<LibraryFolder> get visibleFolders {
+    if (favoritesOnly || searchController.text.trim().isNotEmpty) return [];
+    return foldersIn(selectedFolder);
+  }
+
+  void _openFolder(String? id) => setState(() {
+    selectedFolder = id;
+    favoritesOnly = false;
+    selectedIndex = 0;
+    var parent = widget.store.folders.where((e) => e.id == id).firstOrNull;
+    while (parent?.parentId != null) {
+      expandedFolders.add(parent!.parentId!);
+      parent = widget.store.folders
+          .where((e) => e.id == parent!.parentId)
+          .firstOrNull;
+    }
+  });
+
+  bool _canDrop(_LibraryDrag data, String? target) {
+    if (data.folder) {
+      final folder = widget.store.folders
+          .where((e) => e.id == data.id)
+          .firstOrNull;
+      return folder != null &&
+          folder.parentId != target &&
+          widget.store.canMoveFolder(folder, target);
+    }
+    final item = widget.store.items.where((e) => e.id == data.id).firstOrNull;
+    return item != null && item.folderId != target;
+  }
+
+  Future<void> _drop(_LibraryDrag data, String? target) async {
+    try {
+      if (data.folder) {
+        final folder = widget.store.folders
+            .where((e) => e.id == data.id)
+            .firstOrNull;
+        if (folder == null) return;
+        await widget.store.moveFolder(folder, target);
+        if (target != null) setState(() => expandedFolders.add(target));
+      } else {
+        final item = widget.store.items
+            .where((e) => e.id == data.id)
+            .firstOrNull;
+        if (item == null) return;
+        await widget.store.updateItem(item, move: true, folderId: target);
+      }
+    } catch (e) {
+      _showError('Could not move: $e');
+    }
+  }
+
+  Widget _dropOn(String? target, Widget child) => DragTarget<_LibraryDrag>(
+    onWillAcceptWithDetails: (details) => _canDrop(details.data, target),
+    onAcceptWithDetails: (details) => _drop(details.data, target),
+    builder: (context, candidates, rejects) => DecoratedBox(
+      decoration: BoxDecoration(
+        color: candidates.isEmpty
+            ? Colors.transparent
+            : const Color(0x337C5CDE),
+        borderRadius: BorderRadius.circular(12),
+        border: candidates.isEmpty
+            ? null
+            : Border.all(color: const Color(0xFFBDA7FF)),
+      ),
+      child: child,
+    ),
+  );
+
+  Widget _drag(_LibraryDrag data, String label, IconData icon, Widget child) {
+    final feedback = Material(
+      color: const Color(0xFF382B56),
+      borderRadius: BorderRadius.circular(12),
+      elevation: 8,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 20),
+            const SizedBox(width: 8),
+            Text(label, style: const TextStyle(fontSize: 14)),
+          ],
+        ),
+      ),
+    );
+    if (Platform.isAndroid) {
+      return LongPressDraggable<_LibraryDrag>(
+        data: data,
+        feedback: feedback,
+        childWhenDragging: Opacity(opacity: .4, child: child),
+        child: child,
+      );
+    }
+    return Draggable<_LibraryDrag>(
+      data: data,
+      feedback: feedback,
+      childWhenDragging: Opacity(opacity: .4, child: child),
+      child: child,
+    );
+  }
+
   List<LibraryItem> get visibleItems {
     final query = searchController.text.trim().toLowerCase();
     final items = widget.store.items
         .where(
           (item) =>
-              (selectedFolder == null || item.folderId == selectedFolder) &&
+              (picker && selectedFolder == null ||
+                  searchController.text.trim().isNotEmpty ||
+                  favoritesOnly ||
+                  item.folderId == selectedFolder) &&
               (!favoritesOnly || item.favorite) &&
               (query.isEmpty || item.name.toLowerCase().contains(query)),
         )
@@ -988,7 +1115,7 @@ class _LibraryScreenState extends State<LibraryScreen>
         ? _pickerView()
         : Row(
             children: [
-              if (wide) SizedBox(width: 220, child: _sidebar()),
+              if (wide) SizedBox(width: 250, child: _sidebar()),
               Expanded(
                 child: Column(
                   children: [
@@ -1346,18 +1473,101 @@ class _LibraryScreenState extends State<LibraryScreen>
     );
   }
 
+  Widget _folderTile(LibraryFolder folder, {int depth = 0}) {
+    final children = foldersIn(folder.id);
+    final expanded = expandedFolders.contains(folder.id);
+    final tile = Padding(
+      padding: EdgeInsets.only(left: 8.0 + depth * 16, right: 8, top: 2),
+      child: _dropOn(
+        folder.id,
+        ListTile(
+          key: ValueKey('sidebar-folder-${folder.id}'),
+          dense: true,
+          visualDensity: VisualDensity.compact,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+          leading: IconButton(
+            tooltip: expanded
+                ? 'Collapse ${folder.name}'
+                : 'Expand ${folder.name}',
+            icon: Icon(
+              children.isEmpty
+                  ? Icons.folder_outlined
+                  : (expanded
+                        ? Icons.keyboard_arrow_down
+                        : Icons.keyboard_arrow_right),
+            ),
+            onPressed: children.isEmpty
+                ? null
+                : () => setState(() {
+                    if (expanded) {
+                      expandedFolders.remove(folder.id);
+                    } else {
+                      expandedFolders.add(folder.id);
+                    }
+                  }),
+          ),
+          title: Text(
+            folder.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          selected: selectedFolder == folder.id && !favoritesOnly,
+          onTap: () => _openFolder(folder.id),
+          trailing: PopupMenuButton<String>(
+            tooltip: 'Folder options',
+            onSelected: (action) async {
+              if (action == 'new') {
+                final name = await _askName('New subfolder');
+                if (name != null) {
+                  await widget.store.addFolder(name, parentId: folder.id);
+                  setState(() => expandedFolders.add(folder.id));
+                }
+              } else if (action == 'rename') {
+                final name = await _askName(
+                  'Rename folder',
+                  initial: folder.name,
+                );
+                if (name != null) await widget.store.renameFolder(folder, name);
+              } else if (action == 'delete') {
+                if (selectedFolder == folder.id) _openFolder(folder.parentId);
+                await widget.store.deleteFolder(folder);
+              }
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'new', child: Text('New subfolder')),
+              PopupMenuItem(value: 'rename', child: Text('Rename')),
+              PopupMenuItem(
+                value: 'delete',
+                child: Text('Remove folder; keep contents'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    return Column(
+      children: [
+        _drag(_LibraryDrag.folder(folder.id), folder.name, Icons.folder, tile),
+        if (expanded)
+          for (final child in children) _folderTile(child, depth: depth + 1),
+      ],
+    );
+  }
+
   Widget _sidebar() => Material(
     color: const Color(0xFF1C1924),
     child: Column(
       children: [
-        ListTile(
-          leading: const Icon(Icons.grid_view),
-          title: const Text('All items'),
-          selected: selectedFolder == null && !favoritesOnly,
-          onTap: () => setState(() {
-            selectedFolder = null;
-            favoritesOnly = false;
-          }),
+        _dropOn(
+          null,
+          ListTile(
+            leading: const Icon(Icons.home_outlined),
+            title: const Text('Library root'),
+            selected: selectedFolder == null && !favoritesOnly,
+            onTap: () => _openFolder(null),
+          ),
         ),
         ListTile(
           leading: const Icon(Icons.star_outline),
@@ -1379,7 +1589,15 @@ class _LibraryScreenState extends State<LibraryScreen>
                 icon: const Icon(Icons.add),
                 onPressed: () async {
                   final name = await _askName('New folder');
-                  if (name != null) await widget.store.addFolder(name);
+                  if (name != null) {
+                    await widget.store.addFolder(
+                      name,
+                      parentId: selectedFolder,
+                    );
+                    if (selectedFolder != null) {
+                      setState(() => expandedFolders.add(selectedFolder!));
+                    }
+                  }
                 },
               ),
             ],
@@ -1387,46 +1605,9 @@ class _LibraryScreenState extends State<LibraryScreen>
         ),
         Expanded(
           child: ListView(
-            children: widget.store.folders
-                .map(
-                  (folder) => ListTile(
-                    leading: const Icon(Icons.folder_outlined),
-                    title: Text(
-                      folder.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    selected: selectedFolder == folder.id,
-                    onTap: () => setState(() {
-                      selectedFolder = folder.id;
-                      favoritesOnly = false;
-                    }),
-                    trailing: PopupMenuButton<String>(
-                      onSelected: (action) async {
-                        if (action == 'rename') {
-                          final name = await _askName(
-                            'Rename folder',
-                            initial: folder.name,
-                          );
-                          if (name != null) {
-                            await widget.store.renameFolder(folder, name);
-                          }
-                        }
-                        if (action == 'delete') {
-                          await widget.store.deleteFolder(folder);
-                        }
-                      },
-                      itemBuilder: (_) => const [
-                        PopupMenuItem(value: 'rename', child: Text('Rename')),
-                        PopupMenuItem(
-                          value: 'delete',
-                          child: Text('Remove folder; keep items'),
-                        ),
-                      ],
-                    ),
-                  ),
-                )
-                .toList(),
+            children: [
+              for (final folder in foldersIn(null)) _folderTile(folder),
+            ],
           ),
         ),
       ],
@@ -1435,6 +1616,38 @@ class _LibraryScreenState extends State<LibraryScreen>
 
   Widget _libraryView(bool wide) => Column(
     children: [
+      if (selectedFolder != null &&
+          !favoritesOnly &&
+          searchController.text.trim().isEmpty)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _dropOn(
+                  null,
+                  TextButton.icon(
+                    onPressed: () => _openFolder(null),
+                    icon: const Icon(Icons.home_outlined, size: 18),
+                    label: const Text('Library'),
+                  ),
+                ),
+                for (final folder in _folderPath()) ...[
+                  const Icon(
+                    Icons.chevron_right,
+                    size: 18,
+                    color: Colors.white54,
+                  ),
+                  TextButton(
+                    onPressed: () => _openFolder(folder.id),
+                    child: Text(folder.name),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
         child: Row(
@@ -1444,17 +1657,11 @@ class _LibraryScreenState extends State<LibraryScreen>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    selectedFolder == null
-                        ? favoritesOnly
-                              ? 'Favourites'
-                              : 'Your library'
-                        : widget.store.folders
-                                  .where(
-                                    (folder) => folder.id == selectedFolder,
-                                  )
-                                  .firstOrNull
-                                  ?.name ??
-                              'Your library',
+                    searchController.text.trim().isNotEmpty
+                        ? 'Search results'
+                        : favoritesOnly
+                        ? 'Favourites'
+                        : currentFolder?.name ?? 'Your library',
                     style: const TextStyle(
                       fontSize: 24,
                       fontWeight: FontWeight.w700,
@@ -1462,12 +1669,28 @@ class _LibraryScreenState extends State<LibraryScreen>
                   ),
                   const SizedBox(height: 3),
                   Text(
-                    '${visibleItems.length} ${visibleItems.length == 1 ? 'item' : 'items'}${selectedFolder == null && !favoritesOnly ? ' · GIFs and stickers ready to share' : ''}',
+                    '${visibleFolders.length} ${visibleFolders.length == 1 ? 'folder' : 'folders'} · ${visibleItems.length} ${visibleItems.length == 1 ? 'item' : 'items'}',
                     style: const TextStyle(color: Colors.white60, fontSize: 12),
                   ),
                 ],
               ),
             ),
+            if (!favoritesOnly && searchController.text.trim().isEmpty)
+              IconButton(
+                tooltip: 'New folder',
+                onPressed: () async {
+                  final name = await _askName(
+                    selectedFolder == null ? 'New folder' : 'New subfolder',
+                  );
+                  if (name != null) {
+                    await widget.store.addFolder(
+                      name,
+                      parentId: selectedFolder,
+                    );
+                  }
+                },
+                icon: const Icon(Icons.create_new_folder_outlined),
+              ),
             if (wide)
               FilledButton.icon(
                 onPressed: _import,
@@ -1484,13 +1707,16 @@ class _LibraryScreenState extends State<LibraryScreen>
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 12),
             children: [
-              ChoiceChip(
-                label: const Text('All'),
-                selected: selectedFolder == null && !favoritesOnly,
-                onSelected: (_) => setState(() {
-                  selectedFolder = null;
-                  favoritesOnly = false;
-                }),
+              _dropOn(
+                null,
+                ChoiceChip(
+                  label: const Text('Library root'),
+                  selected: selectedFolder == null && !favoritesOnly,
+                  onSelected: (_) => setState(() {
+                    selectedFolder = null;
+                    favoritesOnly = false;
+                  }),
+                ),
               ),
               const SizedBox(width: 8),
               ChoiceChip(
@@ -1501,7 +1727,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                   favoritesOnly = true;
                 }),
               ),
-              ...widget.store.folders.map(
+              ...foldersIn(null).map(
                 (folder) => Padding(
                   padding: const EdgeInsets.only(left: 8),
                   child: ChoiceChip(
@@ -1514,15 +1740,6 @@ class _LibraryScreenState extends State<LibraryScreen>
                   ),
                 ),
               ),
-              if (!picker)
-                IconButton(
-                  tooltip: 'New folder',
-                  onPressed: () async {
-                    final name = await _askName('New folder');
-                    if (name != null) await widget.store.addFolder(name);
-                  },
-                  icon: const Icon(Icons.create_new_folder_outlined),
-                ),
             ],
           ),
         ),
@@ -1534,13 +1751,13 @@ class _LibraryScreenState extends State<LibraryScreen>
           onChanged: (_) => setState(() {}),
           decoration: InputDecoration(
             prefixIcon: const Icon(Icons.search),
-            hintText: 'Search your library',
+            hintText: 'Search across all folders',
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
           ),
         ),
       ),
       Expanded(
-        child: visibleItems.isEmpty
+        child: visibleItems.isEmpty && visibleFolders.isEmpty
             ? Center(
                 child: SingleChildScrollView(
                   child: Padding(
@@ -1606,13 +1823,22 @@ class _LibraryScreenState extends State<LibraryScreen>
             : GridView.builder(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
                 gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-                  maxCrossAxisExtent: picker ? 140 : 180,
+                  maxCrossAxisExtent: picker ? 140 : 190,
                   childAspectRatio: 0.85,
                   crossAxisSpacing: 12,
                   mainAxisSpacing: 12,
                 ),
-                itemCount: visibleItems.length,
-                itemBuilder: (context, index) => _itemCard(visibleItems[index]),
+                itemCount: visibleFolders.length + visibleItems.length,
+                itemBuilder: (context, index) => index < visibleFolders.length
+                    ? _folderCard(visibleFolders[index])
+                    : _drag(
+                        _LibraryDrag.item(
+                          visibleItems[index - visibleFolders.length].id,
+                        ),
+                        visibleItems[index - visibleFolders.length].name,
+                        Icons.image_outlined,
+                        _itemCard(visibleItems[index - visibleFolders.length]),
+                      ),
               ),
       ),
       if (picker && Platform.isWindows)
@@ -1626,8 +1852,75 @@ class _LibraryScreenState extends State<LibraryScreen>
     ],
   );
 
+  List<LibraryFolder> _folderPath() {
+    final path = <LibraryFolder>[];
+    final seen = <String>{};
+    var folder = currentFolder;
+    while (folder != null && seen.add(folder.id)) {
+      path.insert(0, folder);
+      folder = widget.store.folders
+          .where((e) => e.id == folder!.parentId)
+          .firstOrNull;
+    }
+    return path;
+  }
+
+  Widget _folderCard(LibraryFolder folder) {
+    final subfolders = foldersIn(folder.id).length;
+    final items = widget.store.items
+        .where((item) => item.folderId == folder.id)
+        .length;
+    final card = _dropOn(
+      folder.id,
+      Card(
+        key: ValueKey('folder-card-${folder.id}'),
+        clipBehavior: Clip.antiAlias,
+        margin: EdgeInsets.zero,
+        child: InkWell(
+          onTap: () => _openFolder(folder.id),
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Center(
+                    child: Icon(
+                      Icons.folder_rounded,
+                      size: 72,
+                      color: const Color(0xFFBDA7FF).withValues(alpha: .9),
+                    ),
+                  ),
+                ),
+                Text(
+                  folder.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  '$subfolders folders · $items items',
+                  style: const TextStyle(fontSize: 11, color: Colors.white54),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    return _drag(
+      _LibraryDrag.folder(folder.id),
+      folder.name,
+      Icons.folder,
+      card,
+    );
+  }
+
   Widget _itemCard(LibraryItem item, {bool selected = false}) => Card(
-    key: picker ? GlobalObjectKey('picker-${item.id}') : null,
+    key: picker
+        ? GlobalObjectKey('picker-${item.id}')
+        : ValueKey('item-card-${item.id}'),
     clipBehavior: Clip.antiAlias,
     margin: EdgeInsets.zero,
     shape: RoundedRectangleBorder(

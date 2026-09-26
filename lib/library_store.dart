@@ -224,6 +224,9 @@ class LibraryStore extends ChangeNotifier {
   Future<void> addFolder(String name, {String? parentId}) async {
     final clean = name.trim();
     if (clean.isEmpty) return;
+    if (parentId != null && !folders.any((folder) => folder.id == parentId)) {
+      throw ArgumentError.value(parentId, 'parentId', 'Folder does not exist');
+    }
     final folder = LibraryFolder(
       id: _uuid.v4(),
       name: clean,
@@ -237,6 +240,30 @@ class LibraryStore extends ChangeNotifier {
   Future<void> renameFolder(LibraryFolder folder, String name) async {
     if (name.trim().isEmpty) return;
     folder.name = name.trim();
+    dirtyFolders.add(folder.id);
+    await _save();
+  }
+
+  bool canMoveFolder(LibraryFolder folder, String? parentId) {
+    if (parentId == folder.id) return false;
+    final byId = {for (final entry in folders) entry.id: entry};
+    final visited = <String>{};
+    var current = parentId;
+    while (current != null) {
+      if (!visited.add(current) || current == folder.id) return false;
+      final parent = byId[current];
+      if (parent == null) return false;
+      current = parent.parentId;
+    }
+    return true;
+  }
+
+  Future<void> moveFolder(LibraryFolder folder, String? parentId) async {
+    if (!folders.contains(folder) || !canMoveFolder(folder, parentId)) {
+      throw ArgumentError.value(parentId, 'parentId', 'Invalid folder move');
+    }
+    if (folder.parentId == parentId) return;
+    folder.parentId = parentId;
     dirtyFolders.add(folder.id);
     await _save();
   }

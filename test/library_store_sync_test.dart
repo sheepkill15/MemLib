@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -75,6 +76,32 @@ void main() {
       expect(store.dirtyItems, contains(store.items.single.id));
     },
   );
+
+  test('nested folder moves persist and reject cycles', () async {
+    await store.addFolder('Parent');
+    final parent = store.folders.single;
+    await store.addFolder('Child', parentId: parent.id);
+    final child = store.folders.last;
+    await store.addFolder('Destination');
+    final destination = store.folders.last;
+
+    expect(store.canMoveFolder(parent, child.id), isFalse);
+    await expectLater(store.moveFolder(parent, child.id), throwsArgumentError);
+    await store.moveFolder(child, destination.id);
+    expect(child.parentId, destination.id);
+    expect(store.dirtyFolders, contains(child.id));
+
+    final index = jsonDecode(
+      await File('${sandbox.path}${Platform.pathSeparator}index.json')
+          .readAsString(),
+    ) as Map<String, dynamic>;
+    final saved = (index['folders'] as List<dynamic>)
+        .cast<Map<String, dynamic>>();
+    expect(
+      saved.where((f) => f['id'] == child.id).single['parentId'],
+      destination.id,
+    );
+  });
 
   test('remote removal deletes a clean cached media file', () async {
     final source = File('${sandbox.path}${Platform.pathSeparator}sample.gif');
