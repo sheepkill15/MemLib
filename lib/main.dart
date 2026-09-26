@@ -7,7 +7,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
 import 'package:launch_at_startup/launch_at_startup.dart';
+import 'package:pasteboard/pasteboard.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:win32/win32.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'giphy_service.dart';
@@ -198,7 +200,17 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
   }
 
   bool _handlePickerKey(KeyEvent event) {
-    if (!picker || windowTransition || pasting || busy || event is! KeyDownEvent) return false;
+    if (event is! KeyDownEvent) return false;
+    if (!picker && Platform.isWindows &&
+        event.logicalKey == LogicalKeyboardKey.keyV &&
+        HardwareKeyboard.instance.isControlPressed &&
+        !HardwareKeyboard.instance.isAltPressed &&
+        ModalRoute.of(context)?.isCurrent == true &&
+        IsClipboardFormatAvailable(CF_HDROP) != 0) {
+      unawaited(_importClipboardFiles());
+      return true;
+    }
+    if (!picker || windowTransition || pasting || busy) return false;
     final key = event.logicalKey;
     if (key == LogicalKeyboardKey.escape) {
       unawaited(_dismissPicker());
@@ -477,6 +489,15 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
     return items;
   }
 
+  Future<void> _importClipboardFiles() async {
+    try {
+      final paths = await Pasteboard.files();
+      if (!mounted) return;
+      if (paths.isEmpty) { _showError('No files found on the clipboard.'); return; }
+      await _importPaths(paths);
+    } catch (e) { _showError('Could not import clipboard files: $e'); }
+  }
+
   Future<void> _accountAction(String action) async {
     final cloud = widget.cloud;
     if (cloud == null) return;
@@ -670,7 +691,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
       Text(widget.store.items.isEmpty ? 'Import GIFs and stickers, then reach them from anywhere with the quick picker.' : 'Try another search or choose a different folder.', textAlign: TextAlign.center, style: const TextStyle(color: Colors.white60)),
       const SizedBox(height: 18),
       FilledButton.icon(onPressed: _import, icon: const Icon(Icons.add_photo_alternate_outlined), label: const Text('Import images')),
-      if (Platform.isWindows) const Padding(padding: EdgeInsets.only(top: 10), child: Text('You can also drop images anywhere in this window', style: TextStyle(color: Colors.white54, fontSize: 12))),
+      if (Platform.isWindows) const Padding(padding: EdgeInsets.only(top: 10), child: Text('Drop images here, or copy image files in Explorer and press Ctrl+V', style: TextStyle(color: Colors.white54, fontSize: 12))),
     ])))) : GridView.builder(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
       gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(maxCrossAxisExtent: picker ? 140 : 180, childAspectRatio: 0.85, crossAxisSpacing: 12, mainAxisSpacing: 12),
