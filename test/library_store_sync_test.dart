@@ -21,6 +21,25 @@ void main() {
     await sandbox.delete(recursive: true);
   });
 
+  test('switching accounts restores each separate local library', () async {
+    store.dispose();
+    store = LibraryStore(supportDirectory: sandbox);
+
+    await store.load();
+    await store.addFolder('Guest folder');
+
+    const accountId = 'f27ad7e8-2765-4f69-944d-884872179978';
+    await store.openAccount(accountId);
+    expect(store.folders, isEmpty);
+    await store.addFolder('Account folder');
+
+    await store.openAccount(null);
+    expect(store.folders.single.name, 'Guest folder');
+
+    await store.openAccount(accountId);
+    expect(store.folders.single.name, 'Account folder');
+  });
+
   test(
     'local edits persist until the exact uploaded version is acknowledged',
     () async {
