@@ -97,6 +97,9 @@ class LibraryItem {
 }
 
 class LibraryStore extends ChangeNotifier {
+  LibraryStore({this.supportDirectory});
+
+  final Directory? supportDirectory;
   final folders = <LibraryFolder>[];
   final items = <LibraryItem>[];
   final folderVersions = <String, String>{};
@@ -106,8 +109,8 @@ class LibraryStore extends ChangeNotifier {
   final deletedFolders = <String>{};
   final deletedItems = <String>{};
   String? accountId;
-  late final Directory root;
-  late final Directory media;
+  late Directory root;
+  late Directory media;
 
   Future<void> load() => openAccount(null);
 
@@ -115,7 +118,7 @@ class LibraryStore extends ChangeNotifier {
     if (userId != null && !RegExp(r'^[0-9a-fA-F-]{36}$').hasMatch(userId)) {
       throw ArgumentError.value(userId, 'userId');
     }
-    final support = await getApplicationSupportDirectory();
+    final support = supportDirectory ?? await getApplicationSupportDirectory();
     accountId = userId;
     root = Directory(
       userId == null

@@ -1,10 +1,13 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'cloud_sync.dart';
 import 'library_store.dart';
+
+const authCallbackUrl = 'com.sheepkill15.memlib://auth-callback';
 
 class CloudController extends ChangeNotifier {
   CloudController(this.store, this.client, {RemoteLibrary? remote})
@@ -78,6 +81,9 @@ class CloudController extends ChangeNotifier {
     final response = await client!.auth.signUp(
       email: email.trim(),
       password: password,
+      emailRedirectTo: Platform.isWindows || Platform.isAndroid
+          ? authCallbackUrl
+          : null,
     );
     if (response.session != null) {
       await _enqueue(() => _switchUser(response.user));
