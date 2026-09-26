@@ -36,7 +36,7 @@ class OpenverseService {
       'q': stickers ? '${query.trim()} sticker' : query.trim(),
       'extension': stickers ? 'png,webp' : 'gif',
       'license': 'cc0,pdm',
-      'page_size': '24',
+      'page_size': '20',
       'page': '$page',
     });
     final response = await _client.get(uri, headers: {'User-Agent': 'Memlib/0.1 (personal media library)'});

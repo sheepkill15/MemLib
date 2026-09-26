@@ -10,6 +10,7 @@ void main() {
     final service = OpenverseService(client: MockClient((request) async {
       expect(request.url.queryParameters['license'], 'cc0,pdm');
       expect(request.url.queryParameters['extension'], 'gif');
+      expect(request.url.queryParameters['page_size'], '20');
       return http.Response(jsonEncode({'next': null, 'results': [
         {'id': 'one', 'title': 'Wave', 'url': 'https://example.com/wave.gif', 'thumbnail': 'https://example.com/thumb.gif', 'foreign_landing_url': 'https://example.com/source', 'license': 'cc0'},
         {'id': 'two', 'title': 'Restricted', 'url': 'https://example.com/two.gif', 'thumbnail': 'https://example.com/two.gif', 'foreign_landing_url': 'https://example.com/two', 'license': 'by'},
