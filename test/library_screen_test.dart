@@ -257,7 +257,11 @@ void main() {
 
     await tester.tap(find.text('Add tag'));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField).last, 'funny');
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Search or create a tag'),
+      'funny',
+    );
+    await tester.pump();
     await tester.tap(find.text('Save').last);
     await tester.pumpAndSettle();
     expect(store.items[0].tags, ['funny']);
@@ -294,6 +298,105 @@ void main() {
     expect(store.items.map((item) => item.id), isNot(contains('item0')));
     expect(store.items.map((item) => item.id), isNot(contains('item2')));
     expect(tester.takeException(), isNull);
+  }, skip: !Platform.isWindows);
+
+  testWidgets('tag filter searches existing tags across folders', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final store = _MemoryStore();
+    store.folders.add(LibraryFolder(id: 'other', name: 'Other'));
+    final media = Directory.systemTemp.createTempSync('memlib-tags-media-');
+    store.media = media;
+    addTearDown(() => media.deleteSync(recursive: true));
+    File('${media.path}${Platform.pathSeparator}sample.png').writeAsBytesSync(
+      base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9hQ4sAAAAASUVORK5CYII=',
+      ),
+    );
+    store.items.addAll([
+      LibraryItem(
+        id: 'one',
+        name: 'Cat',
+        filename: 'sample.png',
+        kind: 'sticker',
+        tags: ['Funny', 'Animal'],
+        folderId: 'other',
+      ),
+      LibraryItem(
+        id: 'two',
+        name: 'Dog',
+        filename: 'sample.png',
+        kind: 'sticker',
+        tags: ['Animal'],
+      ),
+    ]);
+    await tester.pumpWidget(MemlibApp(store: store, enableTray: false));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Tags'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Search tags'),
+      'fun',
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Funny'), findsOneWidget);
+    expect(find.text('Animal'), findsNothing);
+    await tester.tap(find.text('Funny'));
+    await tester.tap(find.text('Apply'));
+    await tester.pumpAndSettle();
+    expect(find.text('Cat'), findsOneWidget);
+    expect(find.text('Dog'), findsNothing);
+    expect(find.text('Tags (1)'), findsOneWidget);
+  }, skip: !Platform.isWindows);
+
+  testWidgets('add tag offers existing tags to selected items', (tester) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final store = _MemoryStore();
+    final media = Directory.systemTemp.createTempSync('memlib-tags-media-');
+    store.media = media;
+    addTearDown(() => media.deleteSync(recursive: true));
+    File('${media.path}${Platform.pathSeparator}sample.png').writeAsBytesSync(
+      base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9hQ4sAAAAASUVORK5CYII=',
+      ),
+    );
+    store.items.addAll([
+      LibraryItem(
+        id: 'one',
+        name: 'First',
+        filename: 'sample.png',
+        kind: 'sticker',
+      ),
+      LibraryItem(
+        id: 'two',
+        name: 'Second',
+        filename: 'sample.png',
+        kind: 'sticker',
+        tags: ['Funny'],
+      ),
+    ]);
+    await tester.pumpWidget(MemlibApp(store: store, enableTray: false));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('select-one')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Add tag'));
+    await tester.pumpAndSettle();
+    expect(find.text('Existing tags'), findsOneWidget);
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.text('Funny'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(store.items[0].tags, ['Funny']);
   }, skip: !Platform.isWindows);
 
   testWidgets('long press and drag selects adjacent items on mobile', (
@@ -350,7 +453,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byIcon(Icons.bolt));
       await tester.pumpAndSettle();
-      expect(find.text('Find a sticker or GIF'), findsOneWidget);
+      expect(find.text('Search items and tags'), findsOneWidget);
       expect(
         find.text(
           'Type to search   ·   Arrow keys to move   ·   Enter to paste   ·   Esc to close',

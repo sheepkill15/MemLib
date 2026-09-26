@@ -169,6 +169,7 @@ class _LibraryScreenState extends State<LibraryScreen>
   final libraryGridScroll = ScrollController();
   final libraryGridKey = GlobalKey();
   final selectedItemIds = <String>{};
+  final selectedTagFilters = <String>{};
   String? selectionAnchorId;
   bool mobileSelecting = false;
   double pickerGridWidth = 620;
@@ -555,6 +556,7 @@ class _LibraryScreenState extends State<LibraryScreen>
     try {
       await windowManager.hide();
       searchController.clear();
+      selectedTagFilters.clear();
       setState(() {
         picker = true;
         giphyTab = false;
@@ -930,7 +932,11 @@ class _LibraryScreenState extends State<LibraryScreen>
   }
 
   List<LibraryFolder> get visibleFolders {
-    if (favoritesOnly || searchController.text.trim().isNotEmpty) return [];
+    if (favoritesOnly ||
+        searchController.text.trim().isNotEmpty ||
+        selectedTagFilters.isNotEmpty) {
+      return [];
+    }
     return foldersIn(selectedFolder);
   }
 
@@ -1041,9 +1047,15 @@ class _LibraryScreenState extends State<LibraryScreen>
           (item) =>
               (picker && selectedFolder == null ||
                   searchController.text.trim().isNotEmpty ||
+                  selectedTagFilters.isNotEmpty ||
                   favoritesOnly ||
                   item.folderId == selectedFolder) &&
               (!favoritesOnly || item.favorite) &&
+              selectedTagFilters.every(
+                (selected) => item.tags.any(
+                  (tag) => tag.toLowerCase() == selected.toLowerCase(),
+                ),
+              ) &&
               (query.isEmpty ||
                   item.name.toLowerCase().contains(query) ||
                   item.tags.any((tag) => tag.toLowerCase().contains(query))),
@@ -1059,6 +1071,176 @@ class _LibraryScreenState extends State<LibraryScreen>
   List<LibraryItem> get selectedItems => widget.store.items
       .where((item) => selectedItemIds.contains(item.id))
       .toList();
+
+  List<String> get availableTags {
+    final tags = <String, String>{};
+    for (final item in widget.store.items) {
+      for (final tag in item.tags) {
+        tags.putIfAbsent(tag.toLowerCase(), () => tag);
+      }
+    }
+    return tags.values.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+  }
+
+  Future<String?> _chooseTag(int itemCount) async {
+    var query = '';
+    return showDialog<String>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, update) {
+          final matches = availableTags
+              .where((tag) => tag.toLowerCase().contains(query.toLowerCase()))
+              .toList();
+          return AlertDialog(
+            title: Text('Add tag to $itemCount items'),
+            content: SizedBox(
+              width: 380,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    autofocus: true,
+                    onChanged: (value) => update(() => query = value.trim()),
+                    onSubmitted: (value) {
+                      if (value.trim().isNotEmpty) {
+                        Navigator.pop(context, value.trim());
+                      }
+                    },
+                    decoration: const InputDecoration(
+                      labelText: 'Search or create a tag',
+                      prefixIcon: Icon(Icons.search),
+                    ),
+                  ),
+                  if (matches.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    const Text('Existing tags'),
+                    const SizedBox(height: 6),
+                    SizedBox(
+                      height: 180,
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: matches.length,
+                        itemBuilder: (context, index) => ListTile(
+                          dense: true,
+                          title: Text(matches[index]),
+                          leading: const Icon(Icons.sell_outlined, size: 18),
+                          onTap: () => Navigator.pop(context, matches[index]),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: query.isEmpty
+                    ? null
+                    : () => Navigator.pop(context, query),
+                child: const Text('Save'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _showTagFilters() async {
+    var query = '';
+    final pending = {...selectedTagFilters};
+    final result = await showDialog<Set<String>>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, update) {
+          final matches = availableTags
+              .where((tag) => tag.toLowerCase().contains(query.toLowerCase()))
+              .toList();
+          return AlertDialog(
+            title: const Text('Filter by tags'),
+            content: SizedBox(
+              width: 380,
+              height: 320,
+              child: Column(
+                children: [
+                  TextField(
+                    autofocus: true,
+                    onChanged: (value) => update(() => query = value.trim()),
+                    decoration: const InputDecoration(
+                      hintText: 'Search tags',
+                      prefixIcon: Icon(Icons.search),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: matches.isEmpty
+                        ? const Center(child: Text('No matching tags'))
+                        : ListView.builder(
+                            itemCount: matches.length,
+                            itemBuilder: (context, index) {
+                              final tag = matches[index];
+                              return CheckboxListTile(
+                                dense: true,
+                                title: Text(tag),
+                                value: pending.contains(tag),
+                                onChanged: (checked) => update(() {
+                                  if (checked == true) {
+                                    pending.add(tag);
+                                  } else {
+                                    pending.remove(tag);
+                                  }
+                                }),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => update(pending.clear),
+                child: const Text('Clear'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, pending),
+                child: const Text('Apply'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    if (result == null || !mounted) return;
+    setState(() {
+      selectedTagFilters
+        ..clear()
+        ..addAll(result);
+      selectedItemIds.clear();
+      selectionAnchorId = null;
+      if (picker) _resetPickerList();
+    });
+  }
+
+  Widget _tagFilterButton() => OutlinedButton.icon(
+    onPressed: _showTagFilters,
+    icon: const Icon(Icons.filter_alt_outlined, size: 18),
+    label: Text(
+      selectedTagFilters.isEmpty
+          ? 'Tags'
+          : 'Tags (${selectedTagFilters.length})',
+    ),
+  );
 
   void _clearSelection() => setState(() {
     selectedItemIds.clear();
@@ -1212,9 +1394,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                 icon: const Icon(Icons.sell_outlined, size: 18),
                 label: const Text('Add tag'),
                 onPressed: () async {
-                  final tag = await _askName(
-                    'Add tag to ${items.length} items',
-                  );
+                  final tag = await _chooseTag(items.length);
                   if (tag != null) await widget.store.addTagToItems(items, tag);
                 },
               ),
@@ -1669,21 +1849,29 @@ class _LibraryScreenState extends State<LibraryScreen>
           else ...[
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 2, 14, 10),
-              child: TextField(
-                focusNode: searchFocus,
-                controller: searchController,
-                onChanged: (_) => setState(_resetPickerList),
-                decoration: InputDecoration(
-                  prefixIcon: const Icon(Icons.search),
-                  hintText: 'Find a sticker or GIF',
-                  isDense: true,
-                  filled: true,
-                  fillColor: const Color(0xFF2A2435),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide.none,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      focusNode: searchFocus,
+                      controller: searchController,
+                      onChanged: (_) => setState(_resetPickerList),
+                      decoration: InputDecoration(
+                        prefixIcon: const Icon(Icons.search),
+                        hintText: 'Search items and tags',
+                        isDense: true,
+                        filled: true,
+                        fillColor: const Color(0xFF2A2435),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                    ),
                   ),
-                ),
+                  const SizedBox(width: 8),
+                  _tagFilterButton(),
+                ],
               ),
             ),
             SizedBox(
@@ -1922,7 +2110,8 @@ class _LibraryScreenState extends State<LibraryScreen>
     children: [
       if (selectedFolder != null &&
           !favoritesOnly &&
-          searchController.text.trim().isEmpty)
+          searchController.text.trim().isEmpty &&
+          selectedTagFilters.isEmpty)
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
           child: SingleChildScrollView(
@@ -1961,7 +2150,8 @@ class _LibraryScreenState extends State<LibraryScreen>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    searchController.text.trim().isNotEmpty
+                    searchController.text.trim().isNotEmpty ||
+                            selectedTagFilters.isNotEmpty
                         ? 'Search results'
                         : favoritesOnly
                         ? 'Favourites'
@@ -1979,7 +2169,9 @@ class _LibraryScreenState extends State<LibraryScreen>
                 ],
               ),
             ),
-            if (!favoritesOnly && searchController.text.trim().isEmpty)
+            if (!favoritesOnly &&
+                searchController.text.trim().isEmpty &&
+                selectedTagFilters.isEmpty)
               IconButton(
                 tooltip: 'New folder',
                 onPressed: () async {
@@ -2045,18 +2237,28 @@ class _LibraryScreenState extends State<LibraryScreen>
         ),
       Padding(
         padding: const EdgeInsets.all(16),
-        child: TextField(
-          focusNode: searchFocus,
-          controller: searchController,
-          onChanged: (_) => setState(() {
-            selectedItemIds.clear();
-            selectionAnchorId = null;
-          }),
-          decoration: InputDecoration(
-            prefixIcon: const Icon(Icons.search),
-            hintText: 'Search across all folders',
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-          ),
+        child: Row(
+          children: [
+            Expanded(
+              child: TextField(
+                focusNode: searchFocus,
+                controller: searchController,
+                onChanged: (_) => setState(() {
+                  selectedItemIds.clear();
+                  selectionAnchorId = null;
+                }),
+                decoration: InputDecoration(
+                  prefixIcon: const Icon(Icons.search),
+                  hintText: 'Search names and tags',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            _tagFilterButton(),
+          ],
         ),
       ),
       if (selectedItemIds.isNotEmpty) _selectionToolbar(),
