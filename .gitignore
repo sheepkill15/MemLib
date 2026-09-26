@@ -2,6 +2,12 @@
 .env
 .env.*
 !.env.example
+/android/key.properties
+*.jks
+*.pfx
+*.p12
+*.p8
+*.pem
 /supabase/.temp/
 *.class
 *.log

@@ -1,4 +1,4 @@
-package com.example.memlib
+package com.sheepkill15.memlib
 
 import android.content.ClipData
 import android.content.ClipboardManager
