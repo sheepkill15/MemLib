@@ -25,7 +25,7 @@ Memlib uses [Supabase](https://supabase.com/privacy) for account authentication 
 
 ## Pinterest integration
 
-Pinterest import is planned and is not available in the current app. If released, connecting a Pinterest account will be optional and will use Pinterest's authorization flow. Memlib will request only the access needed to read the boards and Pins you choose to import, and will use that information to create local library items and avoid duplicate imports. We will update this policy with the implemented permissions, token handling, and disconnect controls before that feature is released. Memlib will not ask for your Pinterest password.
+Pinterest integration is being evaluated and is not available in the current app. Any future connection would be optional, use Pinterest's authorization flow, and request only the access needed for the feature you choose. Memlib will not store information obtained through the Pinterest API unless Pinterest permits it, and will link displayed Pins back to Pinterest. We will update this policy with the actual permissions, data handling, and disconnect controls before releasing an integration. Memlib will not ask for your Pinterest password.
 
 ## Retention and your choices
 

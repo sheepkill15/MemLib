@@ -48,7 +48,7 @@ Android can receive images shared from another app, including multiple images, a
 ## Next milestones
 
 1. Test Android keyboard insertion, fallback sharing, and image imports on a physical device across target apps.
-2. Pinterest OAuth import after Pinterest approves API access. Map board/Pins to folders and use each Pin ID as the source identity to skip items already imported.
+2. Evaluate Pinterest OAuth access and whether the proposed user-selected Pin import is allowed under Pinterest's developer rules before implementing it.
 3. Test Windows focus restoration and paste behavior across target apps, then package the Windows app for installation.
 
 ## Current limits
