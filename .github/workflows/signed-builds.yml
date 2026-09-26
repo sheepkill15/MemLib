@@ -60,7 +60,8 @@ jobs:
           flutter build windows --release --build-number=${{ github.run_number }} `
             --dart-define="SUPABASE_URL=$env:SUPABASE_URL" `
             --dart-define="SUPABASE_PUBLISHABLE_KEY=$env:SUPABASE_PUBLISHABLE_KEY" `
-            --dart-define="GIPHY_WINDOWS_KEY=$env:GIPHY_WINDOWS_KEY"
+            --dart-define="GIPHY_WINDOWS_KEY=$env:GIPHY_WINDOWS_KEY" `
+            --dart-define="GIPHY_LIBRARY_SAVES_ENABLED=${{ vars.GIPHY_LIBRARY_SAVES_ENABLED }}"
           if ($LASTEXITCODE -ne 0) { throw 'Windows build failed' }
       - name: Sign and verify Windows binaries
         shell: pwsh
@@ -133,6 +134,7 @@ jobs:
             "--dart-define=SUPABASE_URL=$SUPABASE_URL"
             "--dart-define=SUPABASE_PUBLISHABLE_KEY=$SUPABASE_PUBLISHABLE_KEY"
             "--dart-define=GIPHY_ANDROID_KEY=$GIPHY_ANDROID_KEY"
+            "--dart-define=GIPHY_LIBRARY_SAVES_ENABLED=${{ vars.GIPHY_LIBRARY_SAVES_ENABLED }}"
           )
           flutter build apk --release --build-number=${{ github.run_number }} "${defines[@]}"
           flutter build appbundle --release --build-number=${{ github.run_number }} "${defines[@]}"
