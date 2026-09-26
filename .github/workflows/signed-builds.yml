@@ -146,11 +146,53 @@ jobs:
           if [[ -z "$apksigner" ]]; then echo 'apksigner was not found' >&2; exit 1; fi
           "$apksigner" verify --verbose build/app/outputs/flutter-apk/app-release.apk
           jarsigner -verify build/app/outputs/bundle/release/app-release.aab > /dev/null
+      - name: Package Android release assets
+        shell: bash
+        run: |
+          cp build/app/outputs/flutter-apk/app-release.apk MemLib-Android.apk
+          cp build/app/outputs/bundle/release/app-release.aab MemLib-Android.aab
       - uses: actions/upload-artifact@v4
         with:
           name: MemLib-Android-${{ github.run_number }}
           path: |
-            build/app/outputs/flutter-apk/app-release.apk
-            build/app/outputs/bundle/release/app-release.aab
+            MemLib-Android.apk
+            MemLib-Android.aab
           retention-days: 30
           if-no-files-found: error
+
+  release:
+    if: github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: [windows, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: MemLib-Windows-${{ github.run_number }}
+          path: release-assets/windows
+      - uses: actions/download-artifact@v4
+        with:
+          name: MemLib-Android-${{ github.run_number }}
+          path: release-assets/android
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="$(sed -nE 's/^version:[[:space:]]*([0-9]+\.[0-9]+\.[0-9]+)(\+[0-9]+)?[[:space:]]*$/\1/p' pubspec.yaml)"
+          if [[ -z "$version" ]]; then echo 'Invalid pubspec.yaml version' >&2; exit 1; fi
+          tag="v${version}+${{ github.run_number }}.${{ github.run_attempt }}"
+          for asset in release-assets/windows/MemLib-Windows.zip release-assets/android/MemLib-Android.apk release-assets/android/MemLib-Android.aab; do
+            if [[ ! -s "$asset" ]]; then echo "Missing release asset: $asset" >&2; exit 1; fi
+          done
+          gh release create "$tag" \
+            release-assets/windows/MemLib-Windows.zip \
+            release-assets/android/MemLib-Android.apk \
+            release-assets/android/MemLib-Android.aab \
+            --target "$GITHUB_SHA" \
+            --title "MemLib v${version} (build ${{ github.run_number }})" \
+            --generate-notes \
+            --latest
