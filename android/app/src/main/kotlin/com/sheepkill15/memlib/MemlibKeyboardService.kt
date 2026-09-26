@@ -18,7 +18,9 @@ import android.os.Handler
 import android.os.Looper
 import android.text.InputType
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.View
+import android.view.WindowInsets
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputContentInfo
@@ -58,11 +60,8 @@ class MemlibKeyboardService : InputMethodService() {
     private var favorites = false
     private var search = ""
     private var searchMode = false
-    private var typingMode = false
     private var symbols = false
     private var shifted = false
-    private var status = "Tap a sticker to insert it"
-    private var statusView: TextView? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private val previewExecutor = Executors.newFixedThreadPool(3)
     private var previewGeneration = 0
@@ -80,9 +79,20 @@ class MemlibKeyboardService : InputMethodService() {
     override fun onCreateInputView(): View {
         rootView = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(7), dp(7), dp(7), dp(8))
+            setPadding(dp(8), dp(7), dp(8), dp(8))
             setBackgroundColor(this@MemlibKeyboardService.background)
+            setOnApplyWindowInsetsListener { view, insets ->
+                val bottom = if (Build.VERSION.SDK_INT >= 30) {
+                    insets.getInsets(WindowInsets.Type.navigationBars()).bottom
+                } else {
+                    @Suppress("DEPRECATION")
+                    insets.systemWindowInsetBottom
+                }
+                view.setPadding(dp(8), dp(7), dp(8), maxOf(dp(8), bottom + dp(4)))
+                insets
+            }
         }
+        window?.window?.navigationBarColor = background
         reloadLibrary()
         render()
         return rootView
@@ -96,7 +106,7 @@ class MemlibKeyboardService : InputMethodService() {
             variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
             variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD ||
             variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD
-        if (password) { typingMode = true; searchMode = false }
+        if (password) { searchMode = false; search = "" }
         if (::rootView.isInitialized) render()
     }
 
@@ -125,34 +135,50 @@ class MemlibKeyboardService : InputMethodService() {
         if (!::rootView.isInitialized) return
         previewGeneration++
         rootView.removeAllViews()
-        statusView = null
-        if (typingMode) renderTyping() else renderLibrary()
+        renderLibrary()
     }
 
     private fun renderLibrary() {
+        val hasGiphy = getSharedPreferences("memlib_keyboard", MODE_PRIVATE)
+            .getString("giphy_key", "").orEmpty().isNotBlank()
+        if (!hasGiphy) giphyMode = false
         val top = row()
-        top.addView(label("Memlib", 16, accent, true), LinearLayout.LayoutParams(0, dp(38), 1f))
-        top.addView(key(if (giphyMode) "Library" else "GIPHY", selected = giphyMode) {
-            giphyMode = !giphyMode
-            search = ""
-            searchMode = giphyMode
-            render()
-        })
-        top.addView(key("ABC") { typingMode = true; searchMode = false; render() })
-        top.addView(key("🌐") { switchToNextInputMethod(false) })
-        top.addView(key("↗") { openLibrary() })
+        top.addView(label("Memlib", 17, accent, true), LinearLayout.LayoutParams(0, dp(40), 1f))
+        top.addView(key("Manage", description = "Open Memlib library") { openLibrary() })
         rootView.addView(top)
 
-        val searchRow = row()
-        val searchLabel = if (search.isEmpty()) {
-            if (giphyMode) "⌕  Search GIPHY" else "⌕  Search your stickers"
-        } else "⌕  $search"
-        searchRow.addView(key(searchLabel, selected = searchMode) {
+        val navigation = row()
+        navigation.addView(key("Library", selected = !giphyMode) {
+            if (giphyMode) {
+                giphyGeneration++
+                giphyBusy = false
+                giphyResults = emptyList()
+                giphyHasMore = false
+                giphyMode = false
+                search = ""
+                searchMode = false
+                render()
+            }
+        })
+        if (hasGiphy) navigation.addView(key("GIPHY", selected = giphyMode) {
+            if (!giphyMode) { giphyMode = true; search = ""; searchMode = false; render() }
+        })
+        navigation.addView(View(this), LinearLayout.LayoutParams(0, dp(38), 1f))
+        navigation.addView(key(if (search.isEmpty()) "⌕ Search" else "⌕ ${search.take(12)}", selected = searchMode,
+            description = "Search ${if (giphyMode) "GIPHY" else "library"}") {
             searchMode = !searchMode
             render()
-        }, LinearLayout.LayoutParams(0, dp(38), 1f))
-        if (search.isNotEmpty()) searchRow.addView(key("×") { search = ""; render() })
-        rootView.addView(searchRow)
+        })
+        rootView.addView(navigation)
+
+        if (searchMode) {
+            val searchRow = row()
+            searchRow.addView(label(if (search.isEmpty()) "Type to search" else search, 14, Color.WHITE),
+                LinearLayout.LayoutParams(0, dp(36), 1f))
+            if (search.isNotEmpty()) searchRow.addView(key("Clear") { updateSearch("") })
+            searchRow.addView(key("Done") { searchMode = false; render() })
+            rootView.addView(searchRow)
+        }
 
         if (giphyMode) {
             val chips = row()
@@ -160,7 +186,7 @@ class MemlibKeyboardService : InputMethodService() {
             chips.addView(key("Stickers", selected = giphyStickers) { giphyStickers = true; if (search.isNotBlank()) searchGiphy(false) else render() })
             chips.addView(label("Powered by GIPHY", 11, muted), LinearLayout.LayoutParams(0, dp(38), 1f))
             rootView.addView(chips)
-        } else {
+        } else if (!searchMode) {
             val folderScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
             val chips = row()
             chips.addView(key("All", selected = folderId == null && !favorites) { folderId = null; favorites = false; render() })
@@ -169,7 +195,7 @@ class MemlibKeyboardService : InputMethodService() {
                 folderId = folder.id; favorites = false; render()
             })
             folderScroll.addView(chips)
-            rootView.addView(folderScroll, LinearLayout.LayoutParams(-1, dp(43)))
+            rootView.addView(folderScroll, LinearLayout.LayoutParams(-1, dp(48)))
         }
 
         val matching = items.asSequence()
@@ -201,10 +227,9 @@ class MemlibKeyboardService : InputMethodService() {
             }
         }
         scroller.addView(grid)
-        rootView.addView(scroller, LinearLayout.LayoutParams(-1, dp(if (searchMode) 108 else 207)))
-        if (searchMode) renderKeys(searching = true)
-        statusView = label(status, 11, muted)
-        rootView.addView(statusView, LinearLayout.LayoutParams(-1, dp(24)))
+        val gridHeight = if (searchMode) dp(96) else minOf(dp(208), resources.displayMetrics.heightPixels / 3)
+        rootView.addView(scroller, LinearLayout.LayoutParams(-1, gridHeight))
+        if (searchMode) renderSearchKeys()
     }
 
     private fun tile(item: Item): View {
@@ -219,7 +244,9 @@ class MemlibKeyboardService : InputMethodService() {
         if (file.isFile) showPreview(preview, file)
         outer.addView(preview, LinearLayout.LayoutParams(-1, 0, 1f))
         outer.addView(label((if (item.favorite) "★ " else "") + item.name, 10, Color.WHITE), LinearLayout.LayoutParams(-1, dp(22)))
-        outer.setOnClickListener { sendFile(file, item.id) }
+        outer.contentDescription = "${item.name}. Tap to send, hold to share"
+        outer.isHapticFeedbackEnabled = true
+        outer.setOnClickListener { view -> view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY); sendFile(file, item.id) }
         outer.setOnLongClickListener { shareFile(file); true }
         val holder = LinearLayout(this).apply { setPadding(dp(3), dp(3), dp(3), dp(3)); addView(outer, LinearLayout.LayoutParams(-1, -1)) }
         return holder
@@ -248,7 +275,9 @@ class MemlibKeyboardService : InputMethodService() {
             })
         }
         outer.addView(actions, LinearLayout.LayoutParams(-1, dp(38)))
-        outer.setOnClickListener { downloadGiphy(item, share = false) }
+        outer.contentDescription = "${item.title.ifBlank { "GIPHY GIF" }}. Tap to send, hold to share"
+        outer.isHapticFeedbackEnabled = true
+        outer.setOnClickListener { view -> view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY); downloadGiphy(item, share = false) }
         outer.setOnLongClickListener { downloadGiphy(item, share = true); true }
         return LinearLayout(this).apply { setPadding(dp(3), dp(3), dp(3), dp(3)); addView(outer, LinearLayout.LayoutParams(-1, -1)) }
     }
@@ -262,7 +291,6 @@ class MemlibKeyboardService : InputMethodService() {
         val offset = if (more) giphyOffset else 0
         giphyBusy = true
         if (!more) { giphyResults = emptyList(); giphyPreviews.clear(); giphyHasMore = false }
-        status = "Searching GIPHY…"
         render()
         Thread {
             try {
@@ -295,13 +323,13 @@ class MemlibKeyboardService : InputMethodService() {
                     giphyHasMore = count > 0 && giphyOffset < total && giphyOffset < 5000
                     giphyBusy = false
                     searchMode = false
-                    status = if (giphyResults.isEmpty()) "No results found" else "Tap to send · long-press to share · Powered by GIPHY"
                     render()
                 }
             } catch (error: Exception) {
                 mainHandler.post {
                     if (generation != giphyGeneration) return@post
                     giphyBusy = false
+                    render()
                     notice("GIPHY search failed: ${error.message}")
                 }
             }
@@ -522,63 +550,57 @@ class MemlibKeyboardService : InputMethodService() {
         packageManager.getLaunchIntentForPackage(packageName)?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)?.let(::startActivity)
     }
 
-    private fun renderTyping() {
-        val top = row()
-        top.addView(label("Memlib keyboard", 15, accent, true), LinearLayout.LayoutParams(0, dp(42), 1f))
-        top.addView(key("▦ Stickers") { typingMode = false; reloadLibrary(); render() })
-        top.addView(key("🌐") { switchToNextInputMethod(false) })
-        rootView.addView(top)
-        renderKeys(searching = false)
-    }
-
-    private fun renderKeys(searching: Boolean) {
+    private fun renderSearchKeys() {
         val rows = if (symbols) listOf("1234567890", "@#\$%&-*+()", "!\"':;/?") else listOf("qwertyuiop", "asdfghjkl", "zxcvbnm")
         for ((index, letters) in rows.withIndex()) {
             val line = row()
-            if (index == 2) line.addView(key(if (shifted) "⇧" else "↑") { shifted = !shifted; render() })
+            if (index == 2 && !symbols) line.addView(key(if (shifted) "⇧" else "↑", description = "Shift") { shifted = !shifted; render() })
             for (char in letters) {
                 val shown = if (shifted) char.uppercaseChar() else char
-                line.addView(key("$shown") {
-                    if (searching) { search += shown; render() }
-                    else currentInputConnection?.commitText("$shown", 1)
-                    if (shifted) { shifted = false; render() }
-                }, LinearLayout.LayoutParams(0, dp(44), 1f))
+                val letter = key("$shown") {
+                    shifted = false
+                    updateSearch(search + shown)
+                }
+                line.addView(letter, LinearLayout.LayoutParams(0, dp(44), 1f).apply {
+                    setMargins(dp(2), dp(2), dp(2), dp(2))
+                })
             }
-            if (index == 2) line.addView(key("⌫") {
-                if (searching) { if (search.isNotEmpty()) search = search.dropLast(1); render() }
-                else currentInputConnection?.deleteSurroundingText(1, 0)
+            if (index == 2) line.addView(key("⌫", description = "Backspace") {
+                if (search.isNotEmpty()) updateSearch(search.dropLast(1))
             })
             rootView.addView(line)
         }
         val bottom = row()
-        bottom.addView(key(if (symbols) "ABC" else "?123") { symbols = !symbols; render() })
-        bottom.addView(key(",") { typeOrSearch(",", searching) })
-        bottom.addView(key("space") { typeOrSearch(" ", searching) }, LinearLayout.LayoutParams(0, dp(44), 1f))
-        bottom.addView(key(".") { typeOrSearch(".", searching) })
-        bottom.addView(key(if (searching && giphyMode) "Search" else if (searching) "Done" else "↵") {
-            if (searching && giphyMode) searchGiphy(false)
-            else if (searching) { searchMode = false; render() }
-            else {
-                val action = currentInputEditorInfo?.imeOptions?.and(EditorInfo.IME_MASK_ACTION) ?: EditorInfo.IME_ACTION_NONE
-                if (action != EditorInfo.IME_ACTION_NONE) currentInputConnection?.performEditorAction(action)
-                else currentInputConnection?.commitText("\n", 1)
-            }
+        bottom.addView(key(if (symbols) "Letters" else "?123") { symbols = !symbols; render() })
+        bottom.addView(key(",") { updateSearch(search + ",") })
+        bottom.addView(key("space") { updateSearch(search + " ") }, LinearLayout.LayoutParams(0, dp(44), 1f).apply {
+            setMargins(dp(2), dp(2), dp(2), dp(2))
+        })
+        bottom.addView(key(".") { updateSearch(search + ".") })
+        bottom.addView(key(if (giphyMode) "Search" else "Done") {
+            if (giphyMode) searchGiphy(false)
+            else { searchMode = false; render() }
         })
         rootView.addView(bottom)
     }
 
-    private fun typeOrSearch(value: String, searching: Boolean) {
-        if (searching) { search += value; render() } else currentInputConnection?.commitText(value, 1)
+    private fun updateSearch(value: String) {
+        search = value
+        if (giphyMode) {
+            giphyGeneration++
+            giphyBusy = false
+            giphyResults = emptyList()
+            giphyHasMore = false
+        }
+        render()
     }
 
     private fun notice(message: String) {
         updateStatus(message)
-        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     }
 
     private fun updateStatus(message: String) {
-        status = message
-        statusView?.text = message
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     }
 
     override fun onDestroy() {
@@ -599,16 +621,21 @@ class MemlibKeyboardService : InputMethodService() {
         setPadding(dp(7), 0, dp(7), 0)
     }
 
-    private fun key(text: String, selected: Boolean = false, action: () -> Unit) = TextView(this).apply {
+    private fun key(text: String, selected: Boolean = false, description: String = text, action: () -> Unit) = TextView(this).apply {
         this.text = text
-        textSize = 14f
+        contentDescription = description
+        textSize = 13f
         setTextColor(if (selected) this@MemlibKeyboardService.background else Color.WHITE)
         gravity = Gravity.CENTER
-        background = rounded(if (selected) accent else panel, 10)
-        setPadding(dp(9), 0, dp(9), 0)
-        setOnClickListener { action() }
+        background = rounded(if (selected) accent else panel, 12)
+        setPadding(dp(8), 0, dp(8), 0)
+        isHapticFeedbackEnabled = true
+        setOnClickListener { view ->
+            view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+            action()
+        }
         val margin = dp(2)
-        layoutParams = LinearLayout.LayoutParams(-2, dp(38)).apply { setMargins(margin, margin, margin, margin) }
+        layoutParams = LinearLayout.LayoutParams(-2, dp(40)).apply { setMargins(margin, margin, margin, margin) }
     }
 
     private fun rounded(color: Int, radius: Int) = GradientDrawable().apply {
