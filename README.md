@@ -48,3 +48,25 @@ The **Saveable** tab searches Openverse for GIFs and sticker images marked CC0 o
 The Windows paste uses an image clipboard entry for PNG and JPEG files, a file clipboard entry for GIF and WebP files, and simulated Ctrl+V. A target app may accept an image, animated GIF file, or neither depending on its editor. The selected item remains on the clipboard when automatic paste cannot complete. The Android app copies a media file URI to the clipboard, but cannot insert it directly into another app until the keyboard is implemented. GIPHY selections use a temporary transfer file, deleted after an hour when the app next copies GIPHY media.
 
 Windows builds require Visual Studio's **Desktop development with C++** workload, MSVC build tools, CMake tools, and Windows SDK. Run `flutter doctor -v` to check the local installation.
+
+## Signed CI builds
+
+The [GitHub Actions workflow](.github/workflows/signed-builds.yml) runs analysis and tests on pushes to `develop` and pull requests to `master`. Each push to `master` also builds a signed Windows ZIP and signed Android APK and App Bundle; the artifacts remain downloadable from that workflow run for 30 days. It can also be started manually. Development happens on `develop`, and merging a completed feature into `master` triggers the signed builds.
+
+The permanent Android upload keystore and Windows signing PFX were generated locally in `%USERPROFILE%\.memlib-signing`, outside this Git repository. Keep an offline backup of this directory; losing the Android key can prevent future updates signed with the same identity. The Android application ID is `com.sheepkill15.memlib`. The Windows certificate is self-signed for development: the EXE is Authenticode signed, but other Windows machines will not trust its publisher until you replace the PFX with a certificate from a trusted code-signing provider. The workflow accepts a replacement PFX using the same secret names.
+
+Add these **repository Actions secrets** under GitHub Settings → Secrets and variables → Actions before merging the workflow into `master`:
+
+| Secret | Local source |
+| --- | --- |
+| `ANDROID_KEYSTORE_B64` | `%USERPROFILE%\.memlib-signing\upload-keystore.base64.txt` |
+| `ANDROID_KEYSTORE_PASSWORD` | `androidKeystorePassword` in `%USERPROFILE%\.memlib-signing\credentials.json` |
+| `ANDROID_KEY_PASSWORD` | `androidKeyPassword` in the same credentials file |
+| `WINDOWS_PFX_B64` | `%USERPROFILE%\.memlib-signing\memlib-code-signing.base64.txt` |
+| `WINDOWS_PFX_PASSWORD` | `windowsPfxPassword` in the credentials file |
+| `SUPABASE_URL` | `NEXT_PUBLIC_SUPABASE_URL` in `.env` |
+| `SUPABASE_PUBLISHABLE_KEY` | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` in `.env` |
+| `GIPHY_WINDOWS_KEY` | `GIPHY_WINDOWS_KEY` in `.env` |
+| `GIPHY_ANDROID_KEY` | `GIPHY_ANDROID_KEY` in `.env` |
+
+The Base64 files contain private keys encoded as text; treat them like the keystores themselves. Neither keystore nor local passwords belong in Git. The local Android build reads the ignored `android/key.properties`. Windows CI signs the EXE and DLL files inside the ZIP and checks for Authenticode signatures. Android CI verifies the APK and App Bundle signatures before uploading artifacts.
