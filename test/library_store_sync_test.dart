@@ -1,6 +1,8 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:memlib/library_store.dart';
 
@@ -75,6 +77,108 @@ void main() {
       expect(store.dirtyItems, contains(store.items.single.id));
     },
   );
+
+  test('nested folder moves persist and reject cycles', () async {
+    await store.addFolder('Parent');
+    final parent = store.folders.single;
+    await store.addFolder('Child', parentId: parent.id);
+    final child = store.folders.last;
+    await store.addFolder('Destination');
+    final destination = store.folders.last;
+
+    expect(store.canMoveFolder(parent, child.id), isFalse);
+    await expectLater(store.moveFolder(parent, child.id), throwsArgumentError);
+    await store.moveFolder(child, destination.id);
+    expect(child.parentId, destination.id);
+    expect(store.dirtyFolders, contains(child.id));
+
+    final index = jsonDecode(
+      await File('${sandbox.path}${Platform.pathSeparator}index.json')
+          .readAsString(),
+    ) as Map<String, dynamic>;
+    final saved = (index['folders'] as List<dynamic>)
+        .cast<Map<String, dynamic>>();
+    expect(
+      saved.where((f) => f['id'] == child.id).single['parentId'],
+      destination.id,
+    );
+  });
+
+  test(
+    'ZIP import preserves folders and ignores unsafe and non-media entries',
+    () async {
+      await store.addFolder('Collection');
+      final collection = store.folders.single;
+      await store.addFolder('Animals', parentId: collection.id);
+      final existingAnimals = store.folders.last;
+      final archive = Archive()
+        ..addFile(ArchiveFile.bytes('Animals/Cats/one.png', [1, 2, 3]))
+        ..addFile(ArchiveFile.bytes('Animals/Dogs/two.gif', [4, 5, 6]))
+        ..addFile(ArchiveFile.directory('Empty'))
+        ..addFile(ArchiveFile.bytes('../outside.png', [7]))
+        ..addFile(ArchiveFile.bytes('notes.txt', [8]));
+      final count = await store.importZipBytes(
+        ZipEncoder().encodeBytes(archive),
+        folderId: collection.id,
+      );
+      expect(count, 2);
+      expect(
+        store.folders.where((folder) => folder.name == 'Animals').single.id,
+        existingAnimals.id,
+      );
+      final cats = store.folders.singleWhere((folder) => folder.name == 'Cats');
+      final dogs = store.folders.singleWhere((folder) => folder.name == 'Dogs');
+      final empty = store.folders.singleWhere(
+        (folder) => folder.name == 'Empty',
+      );
+      expect(cats.parentId, existingAnimals.id);
+      expect(dogs.parentId, existingAnimals.id);
+      expect(empty.parentId, collection.id);
+      expect(
+        store.items.singleWhere((item) => item.name == 'one').folderId,
+        cats.id,
+      );
+      expect(
+        store.items.singleWhere((item) => item.name == 'two').folderId,
+        dogs.id,
+      );
+      expect(store.items.length, 2);
+    },
+  );
+
+  test('bulk tags and folder moves persist for selected items', () async {
+    final source = File('${sandbox.path}${Platform.pathSeparator}sample.png');
+    await source.writeAsBytes([1, 2, 3]);
+    await store.importFiles([source.path, source.path]);
+    await store.addFolder('Grouped');
+    final selected = store.items.toList();
+    await store.addTagToItems(selected, '  Reaction  ');
+    await store.addTagToItems(selected, 'reaction');
+    expect(selected.map((item) => item.tags), everyElement(['Reaction']));
+    await store.moveItems(selected, store.folders.single.id);
+    expect(
+      selected.map((item) => item.folderId),
+      everyElement(store.folders.single.id),
+    );
+    await store.removeTagFromItems([selected.first], 'reaction');
+    expect(selected.first.tags, isEmpty);
+    expect(selected.last.tags, ['Reaction']);
+    expect(store.dirtyItems, containsAll(selected.map((item) => item.id)));
+  });
+
+  test('bulk deletion records tombstones and removes selected media', () async {
+    final source = File('${sandbox.path}${Platform.pathSeparator}sample.gif');
+    await source.writeAsBytes([71, 73, 70]);
+    await store.importFiles([source.path, source.path]);
+    final selected = store.items.toList();
+    final files = selected.map(store.fileFor).toList();
+    await store.deleteItems(selected);
+    expect(store.items, isEmpty);
+    expect(store.deletedItems, containsAll(selected.map((item) => item.id)));
+    for (final file in files) {
+      expect(await file.exists(), isFalse);
+    }
+  });
 
   test('remote removal deletes a clean cached media file', () async {
     final source = File('${sandbox.path}${Platform.pathSeparator}sample.gif');

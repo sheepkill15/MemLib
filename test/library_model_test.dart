@@ -10,6 +10,7 @@ void main() {
       kind: 'gif',
       folderId: 'folder-1',
       favorite: true,
+      tags: ['reaction', 'wave'],
       useCount: 7,
       sourceType: 'giphy',
       sourceId: 'abc',
@@ -18,6 +19,7 @@ void main() {
     expect(restored.name, 'Wave');
     expect(restored.folderId, 'folder-1');
     expect(restored.favorite, true);
+    expect(restored.tags, ['reaction', 'wave']);
     expect(restored.useCount, 7);
     expect(restored.sourceType, 'giphy');
     expect(restored.sourceId, 'abc');

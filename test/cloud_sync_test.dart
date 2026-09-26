@@ -146,9 +146,11 @@ void main() {
     ]);
 
     await second.updateItem(second.items.single, favorite: true);
+    await second.addTagToItems(second.items, 'reaction');
     await CloudSyncEngine(second, remote, ownerId).sync();
     await CloudSyncEngine(first, remote, ownerId).sync();
     expect(first.items.single.favorite, isTrue);
+    expect(first.items.single.tags, ['reaction']);
   });
 
   test('propagates deletions without resurrecting old files', () async {

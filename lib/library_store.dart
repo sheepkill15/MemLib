@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:archive/archive.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
@@ -33,18 +34,21 @@ class LibraryItem {
     required this.kind,
     this.folderId,
     this.favorite = false,
+    List<String> tags = const [],
     this.useCount = 0,
     this.sourceType = 'upload',
     String? sourceId,
     this.sourcePage,
     this.licenseLabel,
-  }) : sourceId = sourceId ?? id;
+  }) : tags = List<String>.of(tags),
+       sourceId = sourceId ?? id;
   final String id;
   String name;
   final String filename;
   final String kind;
   String? folderId;
   bool favorite;
+  List<String> tags;
   int useCount;
   final String sourceType;
   final String sourceId;
@@ -58,6 +62,7 @@ class LibraryItem {
     'kind': kind,
     'folderId': folderId,
     'favorite': favorite,
+    'tags': tags,
     'useCount': useCount,
     'sourceType': sourceType,
     'sourceId': sourceId,
@@ -71,6 +76,7 @@ class LibraryItem {
     kind: data['kind'] as String,
     folderId: data['folderId'] as String?,
     favorite: data['favorite'] as bool? ?? false,
+    tags: (data['tags'] as List<dynamic>? ?? []).cast<String>(),
     useCount: data['useCount'] as int? ?? 0,
     sourceType:
         data['sourceType'] as String? ??
@@ -224,6 +230,9 @@ class LibraryStore extends ChangeNotifier {
   Future<void> addFolder(String name, {String? parentId}) async {
     final clean = name.trim();
     if (clean.isEmpty) return;
+    if (parentId != null && !folders.any((folder) => folder.id == parentId)) {
+      throw ArgumentError.value(parentId, 'parentId', 'Folder does not exist');
+    }
     final folder = LibraryFolder(
       id: _uuid.v4(),
       name: clean,
@@ -237,6 +246,30 @@ class LibraryStore extends ChangeNotifier {
   Future<void> renameFolder(LibraryFolder folder, String name) async {
     if (name.trim().isEmpty) return;
     folder.name = name.trim();
+    dirtyFolders.add(folder.id);
+    await _save();
+  }
+
+  bool canMoveFolder(LibraryFolder folder, String? parentId) {
+    if (parentId == folder.id) return false;
+    final byId = {for (final entry in folders) entry.id: entry};
+    final visited = <String>{};
+    var current = parentId;
+    while (current != null) {
+      if (!visited.add(current) || current == folder.id) return false;
+      final parent = byId[current];
+      if (parent == null) return false;
+      current = parent.parentId;
+    }
+    return true;
+  }
+
+  Future<void> moveFolder(LibraryFolder folder, String? parentId) async {
+    if (!folders.contains(folder) || !canMoveFolder(folder, parentId)) {
+      throw ArgumentError.value(parentId, 'parentId', 'Invalid folder move');
+    }
+    if (folder.parentId == parentId) return;
+    folder.parentId = parentId;
     dirtyFolders.add(folder.id);
     await _save();
   }
@@ -279,18 +312,170 @@ class LibraryStore extends ChangeNotifier {
     await _save();
   }
 
+  Future<int> importZipBytes(Uint8List bytes, {String? folderId}) async {
+    if (bytes.length > 100 * 1024 * 1024) {
+      throw const FormatException('ZIP files must be under 100 MB');
+    }
+    if (folderId != null && !folders.any((folder) => folder.id == folderId)) {
+      throw ArgumentError.value(folderId, 'folderId', 'Folder does not exist');
+    }
+    final archive = ZipDecoder().decodeBytes(bytes, verify: true);
+    if (archive.length > 2000) {
+      throw const FormatException('ZIP files can contain at most 2000 entries');
+    }
+    final entries = <(List<String>, ArchiveFile)>[];
+    var totalSize = 0;
+    for (final entry in archive) {
+      final path = entry.name.replaceAll('\\', '/');
+      if (path.startsWith('/') ||
+          RegExp(r'^[A-Za-z]:').hasMatch(path) ||
+          path.contains('\u0000')) {
+        continue;
+      }
+      final parts = path.split('/')..removeWhere((part) => part.isEmpty);
+      if (parts.isEmpty ||
+          parts.any(
+            (part) => part.trim().isEmpty || part == '.' || part == '..',
+          )) {
+        continue;
+      }
+      if (entry.symbolicLink != null) continue;
+      if (entry.isFile) {
+        final extension = parts.last.split('.').last.toLowerCase();
+        if (!{'png', 'gif', 'jpg', 'jpeg', 'webp'}.contains(extension)) {
+          continue;
+        }
+        if (entry.size > 30 * 1024 * 1024 || entry.size < 0) {
+          throw FormatException('${entry.name} exceeds the 30 MB image limit');
+        }
+        totalSize += entry.size;
+        if (totalSize > 250 * 1024 * 1024) {
+          throw const FormatException('ZIP images exceed 250 MB in total');
+        }
+      }
+      entries.add((parts, entry));
+    }
+
+    Future<String?> ensureFolder(List<String> path) async {
+      var parent = folderId;
+      for (final name in path) {
+        var folder = folders
+            .where(
+              (folder) =>
+                  folder.parentId == parent &&
+                  folder.name.toLowerCase() == name.toLowerCase(),
+            )
+            .firstOrNull;
+        if (folder == null) {
+          await addFolder(name, parentId: parent);
+          folder = folders.last;
+        }
+        parent = folder.id;
+      }
+      return parent;
+    }
+
+    var imported = 0;
+    for (final (parts, entry) in entries) {
+      if (entry.isDirectory) {
+        await ensureFolder(parts);
+        continue;
+      }
+      final name = parts.last;
+      final data = entry.readBytes();
+      if (data == null || data.length > 30 * 1024 * 1024) {
+        throw FormatException('Could not read ZIP image ${entry.name}');
+      }
+      final parent = await ensureFolder(parts.sublist(0, parts.length - 1));
+      await importBytes(
+        data,
+        name: name.replaceFirst(RegExp(r'\.[^.]+$'), ''),
+        extension: name.split('.').last.toLowerCase(),
+        folderId: parent,
+      );
+      imported++;
+    }
+    return imported;
+  }
+
   Future<void> updateItem(
     LibraryItem item, {
     String? name,
     String? folderId,
     bool move = false,
     bool? favorite,
+    List<String>? tags,
   }) async {
     if (name != null && name.trim().isNotEmpty) item.name = name.trim();
     if (move) item.folderId = folderId;
     if (favorite != null) item.favorite = favorite;
+    if (tags != null) item.tags = _cleanTags(tags);
     dirtyItems.add(item.id);
     await _save();
+  }
+
+  List<String> _cleanTags(Iterable<String> tags) {
+    final seen = <String>{};
+    return tags
+        .map((tag) => tag.trim())
+        .where((tag) => tag.isNotEmpty && seen.add(tag.toLowerCase()))
+        .toList();
+  }
+
+  Future<void> addTagToItems(Iterable<LibraryItem> selected, String tag) async {
+    final clean = tag.trim();
+    if (clean.isEmpty) return;
+    for (final item in selected) {
+      if (!items.contains(item)) continue;
+      final updated = _cleanTags([...item.tags, clean]);
+      if (updated.length == item.tags.length) continue;
+      item.tags = updated;
+      dirtyItems.add(item.id);
+    }
+    await _save();
+  }
+
+  Future<void> removeTagFromItems(
+    Iterable<LibraryItem> selected,
+    String tag,
+  ) async {
+    for (final item in selected) {
+      if (!items.contains(item)) continue;
+      final updated = item.tags
+          .where((entry) => entry.toLowerCase() != tag.toLowerCase())
+          .toList();
+      if (updated.length == item.tags.length) continue;
+      item.tags = updated;
+      dirtyItems.add(item.id);
+    }
+    await _save();
+  }
+
+  Future<void> moveItems(
+    Iterable<LibraryItem> selected,
+    String? folderId,
+  ) async {
+    if (folderId != null && !folders.any((folder) => folder.id == folderId)) {
+      throw ArgumentError.value(folderId, 'folderId', 'Folder does not exist');
+    }
+    for (final item in selected) {
+      if (!items.contains(item) || item.folderId == folderId) continue;
+      item.folderId = folderId;
+      dirtyItems.add(item.id);
+    }
+    await _save();
+  }
+
+  Future<void> deleteItems(Iterable<LibraryItem> selected) async {
+    final removed = selected.where(items.contains).toList();
+    for (final item in removed) {
+      items.remove(item);
+      dirtyItems.remove(item.id);
+      deletedItems.add(item.id);
+      final file = fileFor(item);
+      if (await file.exists()) await file.delete();
+    }
+    if (removed.isNotEmpty) await _save();
   }
 
   Future<void> markUsed(LibraryItem item) async {

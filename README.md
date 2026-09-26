@@ -14,9 +14,11 @@ When the Windows window is hidden, use the Memlib tray icon to reopen the librar
 
 The local library lives under the app support directory. Imported files are copied into app storage, so moving the original files does not break the library. On Windows, drag PNG, GIF, JPEG, or WebP files from Explorer into the library window, or copy those files in Explorer and press Ctrl+V while the library window is focused. They import into the selected folder; normal text pasting in search fields still works.
 
+In the main library, use the corner checkboxes to select items for bulk actions. Shift-click selects a range and Ctrl-click toggles individual items on Windows; on Android, long-press an item and drag across others to select them. The selection toolbar can add a custom tag, remove a tag, move items to a folder, or delete them. Search matches names and tags. The Windows quick picker keeps its one-click paste behavior, and its GIPHY results show save and favourite controls when GIPHY library saving is enabled.
+
 ## Supabase sign-in and sync
 
-Create a Supabase project, then apply [`supabase/migrations/0001_library.sql`](supabase/migrations/0001_library.sql), [`supabase/migrations/0002_item_source.sql`](supabase/migrations/0002_item_source.sql), and [`supabase/migrations/0003_source_identity.sql`](supabase/migrations/0003_source_identity.sql) in its SQL editor, in that order. Apply only migrations you have not already run. The app accepts the URL and **publishable** key through Dart defines:
+Create a Supabase project, then apply [`supabase/migrations/0001_library.sql`](supabase/migrations/0001_library.sql), [`supabase/migrations/0002_item_source.sql`](supabase/migrations/0002_item_source.sql), [`supabase/migrations/0003_source_identity.sql`](supabase/migrations/0003_source_identity.sql), and [`supabase/migrations/0004_item_tags.sql`](supabase/migrations/0004_item_tags.sql) in its SQL editor, in that order. Apply only migrations you have not already run. Apply `0004_item_tags.sql` before running a tags-enabled app with account sync. The app accepts the URL and **publishable** key through Dart defines:
 
 ```powershell
 flutter run -d windows --dart-define=SUPABASE_URL=https://YOUR_PROJECT.supabase.co --dart-define=SUPABASE_PUBLISHABLE_KEY=YOUR_PUBLISHABLE_KEY
@@ -61,7 +63,7 @@ Windows builds require Visual Studio's **Desktop development with C++** workload
 
 ## Signed CI builds
 
-The [GitHub Actions workflow](.github/workflows/signed-builds.yml) runs analysis and tests on pushes to `develop` and pull requests to `master`. Each push to `master` also builds a signed Windows ZIP and signed Android APK and App Bundle; the artifacts remain downloadable from that workflow run for 30 days. It can also be started manually. Development happens on `develop`, and merging a completed feature into `master` triggers the signed builds.
+The [GitHub Actions workflow](.github/workflows/signed-builds.yml) runs analysis and tests on pushes to `develop` and pull requests to `master`. Each push to `master` builds a signed Windows ZIP and signed Android APK and App Bundle, then publishes all three files in a GitHub Release after both builds succeed. The release tag combines the version in `pubspec.yaml`, the workflow run number, and the run attempt (for example, `v1.0.0+42.1`); each release points to the exact `master` commit that was built. The files also remain downloadable from the workflow run for 30 days. The workflow can be started manually; manual runs publish a release only when started on `master`. Development happens on `develop`, and merging a completed feature into `master` triggers the signed builds and release.
 
 The permanent Android upload keystore and Windows signing PFX were generated locally in `%USERPROFILE%\.memlib-signing`, outside this Git repository. Keep an offline backup of this directory; losing the Android key can prevent future updates signed with the same identity. The Android application ID is `com.sheepkill15.memlib`. The Windows certificate is self-signed for development: the EXE is Authenticode signed, but other Windows machines will not trust its publisher until you replace the PFX with a certificate from a trusted code-signing provider. The workflow accepts a replacement PFX using the same secret names.
 
