@@ -66,6 +66,19 @@ class _MemoryStore extends LibraryStore {
   }
 
   @override
+  Future<void> removeTagFromItems(
+    Iterable<LibraryItem> selected,
+    String tag,
+  ) async {
+    for (final item in selected) {
+      item.tags.removeWhere(
+        (entry) => entry.toLowerCase() == tag.toLowerCase(),
+      );
+    }
+    notifyListeners();
+  }
+
+  @override
   Future<void> moveItems(
     Iterable<LibraryItem> selected,
     String? folderId,
@@ -240,9 +253,18 @@ void main() {
     }
     await tester.pumpWidget(MemlibApp(store: store, enableTray: false));
     await tester.pumpAndSettle();
+    final gridBeforeSelection = tester.getRect(find.byType(GridView).first);
+    final cardBeforeSelection = tester.getRect(
+      find.byKey(const ValueKey('item-card-item0')),
+    );
     await tester.tap(find.byKey(const ValueKey('select-item0')));
     await tester.pumpAndSettle();
     expect(find.text('1 selected'), findsOneWidget);
+    expect(tester.getRect(find.byType(GridView).first), gridBeforeSelection);
+    expect(
+      tester.getRect(find.byKey(const ValueKey('item-card-item0'))),
+      cardBeforeSelection,
+    );
 
     await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
     await tester.tap(find.byKey(const ValueKey('select-item2')));
@@ -256,7 +278,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('2 selected'), findsOneWidget);
 
-    await tester.tap(find.text('Add tag'));
+    await tester.tap(find.byTooltip('Add tag'));
     await tester.pumpAndSettle();
     await tester.enterText(
       find.widgetWithText(TextField, 'Search or create a tag'),
@@ -268,8 +290,14 @@ void main() {
     expect(store.items[0].tags, ['funny']);
     expect(store.items[1].tags, isEmpty);
     expect(store.items[2].tags, ['funny']);
+    await tester.tap(find.byTooltip('Remove tags'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Remove funny'));
+    await tester.pumpAndSettle();
+    expect(store.items[0].tags, isEmpty);
+    expect(store.items[2].tags, isEmpty);
 
-    await tester.tap(find.text('Move'));
+    await tester.tap(find.byTooltip('Move'));
     await tester.pumpAndSettle();
     await tester.tap(
       find.descendant(
@@ -287,7 +315,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('select-item0')));
     await tester.tap(find.byKey(const ValueKey('select-item2')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Delete'));
+    await tester.tap(find.byTooltip('Delete'));
     await tester.pumpAndSettle();
     await tester.tap(
       find.descendant(
@@ -298,6 +326,40 @@ void main() {
     await tester.pumpAndSettle();
     expect(store.items.map((item) => item.id), isNot(contains('item0')));
     expect(store.items.map((item) => item.id), isNot(contains('item2')));
+    expect(tester.takeException(), isNull);
+  }, skip: !Platform.isWindows);
+
+  testWidgets('floating selection controls fit a narrow library', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final store = _MemoryStore();
+    final media = Directory.systemTemp.createTempSync('memlib-narrow-select-');
+    store.media = media;
+    addTearDown(() => media.deleteSync(recursive: true));
+    File('${media.path}${Platform.pathSeparator}sample.png').writeAsBytesSync(
+      base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9hQ4sAAAAASUVORK5CYII=',
+      ),
+    );
+    store.items.add(
+      LibraryItem(
+        id: 'tagged',
+        name: 'Tagged',
+        filename: 'sample.png',
+        kind: 'sticker',
+        tags: ['Funny'],
+      ),
+    );
+    await tester.pumpWidget(MemlibApp(store: store, enableTray: false));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('select-tagged')));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Remove tags'), findsOneWidget);
+    expect(find.byTooltip('Clear selection'), findsOneWidget);
     expect(tester.takeException(), isNull);
   }, skip: !Platform.isWindows);
 
@@ -469,7 +531,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('select-one')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Add tag'));
+    await tester.tap(find.byTooltip('Add tag'));
     await tester.pumpAndSettle();
     expect(find.text('Existing tags'), findsOneWidget);
     await tester.tap(

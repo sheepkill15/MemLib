@@ -1416,109 +1416,113 @@ class _LibraryScreenState extends State<LibraryScreen>
     },
   );
 
-  Widget _selectionToolbar() {
+  Widget _selectionToolbar({required bool compact}) {
     final items = selectedItems;
     final tags = items.expand((item) => item.tags).toSet().toList()..sort();
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: const Color(0xFF2D2540),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFF665286)),
+    return Material(
+      elevation: 12,
+      color: const Color(0xFF2D2540),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: const BorderSide(color: Color(0xFF665286)),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Wrap(
-            spacing: 8,
-            runSpacing: 6,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              Text(
-                '${items.length} selected',
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Text(
+                compact ? '${items.length}' : '${items.length} selected',
                 style: const TextStyle(fontWeight: FontWeight.w600),
               ),
-              TextButton.icon(
-                icon: const Icon(Icons.sell_outlined, size: 18),
-                label: const Text('Add tag'),
-                onPressed: () async {
-                  final tag = await _chooseTag(items.length);
-                  if (tag != null) await widget.store.addTagToItems(items, tag);
-                },
+            ),
+            IconButton(
+              tooltip: 'Add tag',
+              icon: const Icon(Icons.sell_outlined),
+              iconSize: 20,
+              constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+              padding: EdgeInsets.zero,
+              onPressed: () async {
+                final tag = await _chooseTag(items.length);
+                if (tag != null) await widget.store.addTagToItems(items, tag);
+              },
+            ),
+            if (tags.isNotEmpty)
+              SizedBox(
+                width: 40,
+                height: 40,
+                child: PopupMenuButton<String>(
+                  tooltip: 'Remove tags',
+                  icon: const Icon(Icons.label_off_outlined, size: 20),
+                  padding: EdgeInsets.zero,
+                  onSelected: (tag) =>
+                      widget.store.removeTagFromItems(items, tag),
+                  itemBuilder: (_) => [
+                    for (final tag in tags)
+                      PopupMenuItem(value: tag, child: Text('Remove $tag')),
+                  ],
+                ),
               ),
-              TextButton.icon(
-                icon: const Icon(Icons.drive_file_move_outline, size: 18),
-                label: const Text('Move'),
-                onPressed: () async {
-                  final folder = await _chooseMoveFolder();
-                  if (folder == null) return;
-                  await widget.store.moveItems(
-                    items,
-                    folder.isEmpty ? null : folder,
-                  );
+            IconButton(
+              tooltip: 'Move',
+              icon: const Icon(Icons.drive_file_move_outline),
+              iconSize: 20,
+              constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+              padding: EdgeInsets.zero,
+              onPressed: () async {
+                final folder = await _chooseMoveFolder();
+                if (folder == null) return;
+                await widget.store.moveItems(
+                  items,
+                  folder.isEmpty ? null : folder,
+                );
+                _clearSelection();
+              },
+            ),
+            IconButton(
+              tooltip: 'Delete',
+              icon: const Icon(Icons.delete_outline),
+              iconSize: 20,
+              constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+              padding: EdgeInsets.zero,
+              onPressed: () async {
+                final confirmed = await showDialog<bool>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: Text('Delete ${items.length} items?'),
+                    content: const Text(
+                      'This removes the selected media from your library.',
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        child: const Text('Cancel'),
+                      ),
+                      FilledButton(
+                        onPressed: () => Navigator.pop(context, true),
+                        child: const Text('Delete'),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirmed == true) {
+                  await widget.store.deleteItems(items);
                   _clearSelection();
-                },
-              ),
-              TextButton.icon(
-                icon: const Icon(Icons.delete_outline, size: 18),
-                label: const Text('Delete'),
-                onPressed: () async {
-                  final confirmed = await showDialog<bool>(
-                    context: context,
-                    builder: (context) => AlertDialog(
-                      title: Text('Delete ${items.length} items?'),
-                      content: const Text(
-                        'This removes the selected media from your library.',
-                      ),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(context, false),
-                          child: const Text('Cancel'),
-                        ),
-                        FilledButton(
-                          onPressed: () => Navigator.pop(context, true),
-                          child: const Text('Delete'),
-                        ),
-                      ],
-                    ),
-                  );
-                  if (confirmed == true) {
-                    await widget.store.deleteItems(items);
-                    _clearSelection();
-                  }
-                },
-              ),
-              IconButton(
-                tooltip: 'Clear selection',
-                icon: const Icon(Icons.close),
-                onPressed: _clearSelection,
-              ),
-            ],
-          ),
-          if (tags.isNotEmpty) ...[
-            const SizedBox(height: 5),
-            SizedBox(
-              height: 36,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                children: [
-                  for (final tag in tags)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: InputChip(
-                        label: Text(tag),
-                        onDeleted: () =>
-                            widget.store.removeTagFromItems(items, tag),
-                        deleteIcon: const Icon(Icons.close, size: 16),
-                      ),
-                    ),
-                ],
-              ),
+                }
+              },
+            ),
+            IconButton(
+              tooltip: 'Clear selection',
+              icon: const Icon(Icons.close),
+              iconSize: 20,
+              constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+              padding: EdgeInsets.zero,
+              onPressed: _clearSelection,
             ),
           ],
-        ],
+        ),
       ),
     );
   }
@@ -2314,98 +2318,124 @@ class _LibraryScreenState extends State<LibraryScreen>
           ],
         ),
       ),
-      if (selectedItemIds.isNotEmpty) _selectionToolbar(),
       Expanded(
-        child: visibleItems.isEmpty && visibleFolders.isEmpty
-            ? Center(
-                child: SingleChildScrollView(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 92,
-                          height: 92,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF2D2540),
-                            borderRadius: BorderRadius.circular(26),
-                          ),
-                          child: const Icon(
-                            Icons.collections_bookmark_outlined,
-                            size: 46,
-                            color: Color(0xFFBDA7FF),
-                          ),
-                        ),
-                        const SizedBox(height: 18),
-                        Text(
-                          widget.store.items.isEmpty
-                              ? 'Build your collection'
-                              : 'Nothing found',
-                          style: const TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          widget.store.items.isEmpty
-                              ? Platform.isAndroid
-                                    ? 'Import GIFs and stickers, then reach them from any text field with the Memlib keyboard.'
-                                    : 'Import GIFs and stickers, then reach them from anywhere with the quick picker.'
-                              : 'Try another search or choose a different folder.',
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(color: Colors.white60),
-                        ),
-                        const SizedBox(height: 18),
-                        FilledButton.icon(
-                          onPressed: _import,
-                          icon: const Icon(Icons.add_photo_alternate_outlined),
-                          label: const Text('Import images'),
-                        ),
-                        if (Platform.isWindows)
-                          const Padding(
-                            padding: EdgeInsets.only(top: 10),
-                            child: Text(
-                              'Drop images here, or copy image files in Explorer and press Ctrl+V',
-                              style: TextStyle(
-                                color: Colors.white54,
-                                fontSize: 12,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: visibleItems.isEmpty && visibleFolders.isEmpty
+                  ? Center(
+                      child: SingleChildScrollView(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: 92,
+                                height: 92,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF2D2540),
+                                  borderRadius: BorderRadius.circular(26),
+                                ),
+                                child: const Icon(
+                                  Icons.collections_bookmark_outlined,
+                                  size: 46,
+                                  color: Color(0xFFBDA7FF),
+                                ),
                               ),
-                            ),
+                              const SizedBox(height: 18),
+                              Text(
+                                widget.store.items.isEmpty
+                                    ? 'Build your collection'
+                                    : 'Nothing found',
+                                style: const TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                widget.store.items.isEmpty
+                                    ? Platform.isAndroid
+                                          ? 'Import GIFs and stickers, then reach them from any text field with the Memlib keyboard.'
+                                          : 'Import GIFs and stickers, then reach them from anywhere with the quick picker.'
+                                    : 'Try another search or choose a different folder.',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(color: Colors.white60),
+                              ),
+                              const SizedBox(height: 18),
+                              FilledButton.icon(
+                                onPressed: _import,
+                                icon: const Icon(
+                                  Icons.add_photo_alternate_outlined,
+                                ),
+                                label: const Text('Import images'),
+                              ),
+                              if (Platform.isWindows)
+                                const Padding(
+                                  padding: EdgeInsets.only(top: 10),
+                                  child: Text(
+                                    'Drop images here, or copy image files in Explorer and press Ctrl+V',
+                                    style: TextStyle(
+                                      color: Colors.white54,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ),
+                            ],
                           ),
-                      ],
+                        ),
+                      ),
+                    )
+                  : GridView.builder(
+                      key: libraryGridKey,
+                      controller: libraryGridScroll,
+                      padding: EdgeInsets.fromLTRB(
+                        16,
+                        0,
+                        16,
+                        selectedItemIds.isEmpty ? 20 : 88,
+                      ),
+                      gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+                        maxCrossAxisExtent: picker ? 140 : 190,
+                        childAspectRatio: 0.85,
+                        crossAxisSpacing: 12,
+                        mainAxisSpacing: 12,
+                      ),
+                      itemCount: visibleFolders.length + visibleItems.length,
+                      itemBuilder: (context, index) {
+                        if (index < visibleFolders.length) {
+                          return _folderCard(visibleFolders[index]);
+                        }
+                        final item =
+                            visibleItems[index - visibleFolders.length];
+                        final drag = _dragDataForItem(item);
+                        return _drag(
+                          drag,
+                          drag.itemIds.length == 1
+                              ? item.name
+                              : '${drag.itemIds.length} items',
+                          Icons.image_outlined,
+                          _itemCard(item),
+                        );
+                      },
+                    ),
+            ),
+            if (selectedItemIds.isNotEmpty)
+              Positioned(
+                left: 12,
+                right: 12,
+                bottom: 16,
+                child: LayoutBuilder(
+                  builder: (context, constraints) => Center(
+                    child: _selectionToolbar(
+                      compact: constraints.maxWidth < 360,
                     ),
                   ),
                 ),
-              )
-            : GridView.builder(
-                key: libraryGridKey,
-                controller: libraryGridScroll,
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-                gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-                  maxCrossAxisExtent: picker ? 140 : 190,
-                  childAspectRatio: 0.85,
-                  crossAxisSpacing: 12,
-                  mainAxisSpacing: 12,
-                ),
-                itemCount: visibleFolders.length + visibleItems.length,
-                itemBuilder: (context, index) {
-                  if (index < visibleFolders.length) {
-                    return _folderCard(visibleFolders[index]);
-                  }
-                  final item = visibleItems[index - visibleFolders.length];
-                  final drag = _dragDataForItem(item);
-                  return _drag(
-                    drag,
-                    drag.itemIds.length == 1
-                        ? item.name
-                        : '${drag.itemIds.length} items',
-                    Icons.image_outlined,
-                    _itemCard(item),
-                  );
-                },
               ),
+          ],
+        ),
       ),
       if (picker && Platform.isWindows)
         const Padding(
