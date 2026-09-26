@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:memlib/cloud_sync.dart';
@@ -142,6 +143,15 @@ void main() {
     await expectLater(CloudSyncEngine(first, remote, ownerId).sync(), throwsA(isA<SyncConflict>()));
     expect(first.folders.single.name, 'On first');
     expect(remote.folders.values.single.folder.name, 'On second');
+  });
+
+  test('preserves source and license details for saved open media', () async {
+    await first.importBytes(Uint8List.fromList([71, 73, 70, 56, 57, 97]), name: 'Wave', extension: 'gif', sourcePage: 'https://example.org/wave', licenseLabel: 'CC0', favorite: true);
+    await CloudSyncEngine(first, remote, ownerId).sync();
+    await CloudSyncEngine(second, remote, ownerId).sync();
+    expect(second.items.single.sourcePage, 'https://example.org/wave');
+    expect(second.items.single.licenseLabel, 'CC0');
+    expect(second.items.single.favorite, isTrue);
   });
 
   test('resolving a folder conflict with the cloud pulls the remote edit', () async {

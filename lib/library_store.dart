@@ -30,6 +30,8 @@ class LibraryItem {
     this.folderId,
     this.favorite = false,
     this.useCount = 0,
+    this.sourcePage,
+    this.licenseLabel,
   });
   final String id;
   String name;
@@ -38,6 +40,8 @@ class LibraryItem {
   String? folderId;
   bool favorite;
   int useCount;
+  final String? sourcePage;
+  final String? licenseLabel;
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -47,6 +51,8 @@ class LibraryItem {
     'folderId': folderId,
     'favorite': favorite,
     'useCount': useCount,
+    'sourcePage': sourcePage,
+    'licenseLabel': licenseLabel,
   };
   factory LibraryItem.fromJson(Map<String, dynamic> data) => LibraryItem(
     id: data['id'] as String,
@@ -56,6 +62,8 @@ class LibraryItem {
     folderId: data['folderId'] as String?,
     favorite: data['favorite'] as bool? ?? false,
     useCount: data['useCount'] as int? ?? 0,
+    sourcePage: data['sourcePage'] as String?,
+    licenseLabel: data['licenseLabel'] as String?,
   );
 }
 
@@ -244,7 +252,7 @@ class LibraryStore extends ChangeNotifier {
       final id = _uuid.v4();
       final filename = '$id.$extension';
       await source.copy('${media.path}${Platform.pathSeparator}$filename');
-      final copy = LibraryItem(id: id, name: item.name, filename: filename, kind: item.kind, folderId: item.folderId == null ? null : folderIds[item.folderId], favorite: item.favorite, useCount: item.useCount);
+      final copy = LibraryItem(id: id, name: item.name, filename: filename, kind: item.kind, folderId: item.folderId == null ? null : folderIds[item.folderId], favorite: item.favorite, useCount: item.useCount, sourcePage: item.sourcePage, licenseLabel: item.licenseLabel);
       items.add(copy);
       dirtyItems.add(copy.id);
       copied++;
@@ -277,6 +285,19 @@ class LibraryStore extends ChangeNotifier {
       if (current != null && expected != null && jsonEncode(current.toJson()) == jsonEncode(expected)) dirtyItems.remove(id);
     }
     await _save();
+  }
+
+  Future<LibraryItem> importBytes(Uint8List bytes, {required String name, required String extension, String? folderId, String? sourcePage, String? licenseLabel, bool favorite = false}) async {
+    if (!{'png', 'gif', 'jpg', 'jpeg', 'webp'}.contains(extension)) throw ArgumentError.value(extension, 'extension');
+    final id = _uuid.v4();
+    final filename = '$id.$extension';
+    final file = File('${media.path}${Platform.pathSeparator}$filename');
+    await file.writeAsBytes(bytes, flush: true);
+    final item = LibraryItem(id: id, name: name.trim().isEmpty ? 'Untitled' : name.trim(), filename: filename, kind: extension == 'gif' ? 'gif' : 'sticker', folderId: folderId, favorite: favorite, sourcePage: sourcePage, licenseLabel: licenseLabel);
+    items.add(item);
+    dirtyItems.add(id);
+    await _save();
+    return item;
   }
 
   Future<void> resolveConflict(String entity, String id, {required bool keepDevice, String? remoteVersion}) async {

@@ -14,7 +14,7 @@ The local library lives under the app support directory. Imported files are copi
 
 ## Supabase sign-in and sync
 
-Create a Supabase project, then apply [`supabase/migrations/0001_library.sql`](supabase/migrations/0001_library.sql) in its SQL editor. The app accepts the URL and **publishable** key through Dart defines:
+Create a Supabase project, then apply [`supabase/migrations/0001_library.sql`](supabase/migrations/0001_library.sql) and [`supabase/migrations/0002_item_source.sql`](supabase/migrations/0002_item_source.sql) in its SQL editor, in that order. If you already applied the first migration, apply only the second. The app accepts the URL and **publishable** key through Dart defines:
 
 ```powershell
 flutter run -d windows --dart-define=SUPABASE_URL=https://YOUR_PROJECT.supabase.co --dart-define=SUPABASE_PUBLISHABLE_KEY=YOUR_PUBLISHABLE_KEY
@@ -34,6 +34,8 @@ flutter run -d android --dart-define=GIPHY_ANDROID_KEY=YOUR_KEY
 ```
 
 GIPHY results are displayed in their own view with attribution, including inside the Windows quick picker. Search is submitted explicitly to conserve API calls, and more results can be loaded on demand. Choosing a result copies it and, when opened from another app with the quick shortcut, attempts to paste it into the previous input. The app sends GIPHY's view, click, and send analytics events; it does not store GIPHY media in the library. GIPHY beta keys currently allow 100 API calls per hour. Review their current API terms before release.
+
+The **Saveable** tab searches Openverse for GIFs and sticker images marked CC0 or public domain. Use the download button to add one to the current library folder, or the star to save it as a favourite. Saved media and its source page and license label sync with your account. The info button copies the source link. Openverse does not verify every source's license, so inspect the linked source before redistributing an image outside your personal collection. GIPHY content stays in the separate quick-search view because its API terms restrict building a stored GIF library from its results.
 
 ## Next milestones
 

@@ -67,7 +67,7 @@ class SupabaseRemoteLibrary implements RemoteLibrary {
       throw FormatException('Invalid media path for item $id');
     }
     return RemoteItem(
-      LibraryItem(id: id, name: row['title'] as String, filename: path.split('/').last, kind: row['kind'] as String, folderId: row['folder_id'] as String?, favorite: row['favorite'] as bool? ?? false, useCount: row['use_count'] as int? ?? 0),
+      LibraryItem(id: id, name: row['title'] as String, filename: path.split('/').last, kind: row['kind'] as String, folderId: row['folder_id'] as String?, favorite: row['favorite'] as bool? ?? false, useCount: row['use_count'] as int? ?? 0, sourcePage: row['source_page'] as String?, licenseLabel: row['license_label'] as String?),
       row['updated_at'] as String,
       path,
     );
@@ -93,7 +93,7 @@ class SupabaseRemoteLibrary implements RemoteLibrary {
 
   @override
   Future<String> createItem(String ownerId, LibraryItem item, String storagePath) async {
-    final row = await client.from('library_items').insert({'id': item.id, 'owner_id': ownerId, 'folder_id': item.folderId, 'title': item.name, 'kind': item.kind, 'source': 'upload', 'storage_path': storagePath, 'favorite': item.favorite, 'use_count': item.useCount}).select('updated_at').single();
+    final row = await client.from('library_items').insert({'id': item.id, 'owner_id': ownerId, 'folder_id': item.folderId, 'title': item.name, 'kind': item.kind, 'source': 'upload', 'storage_path': storagePath, 'favorite': item.favorite, 'use_count': item.useCount, if (item.sourcePage != null) 'source_page': item.sourcePage, if (item.licenseLabel != null) 'license_label': item.licenseLabel}).select('updated_at').single();
     return row['updated_at'] as String;
   }
 

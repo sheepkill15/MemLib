@@ -17,6 +17,7 @@ import 'account_dialog.dart';
 import 'cloud_controller.dart';
 import 'library_store.dart';
 import 'media_actions.dart';
+import 'openverse_panel.dart';
 import 'picker_navigation.dart';
 import 'shortcut_settings.dart';
 import 'windows_tray.dart';
@@ -90,6 +91,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
   bool favoritesOnly = false;
   bool picker = false;
   bool giphyTab = false;
+  bool openverseTab = false;
   bool stickerSearch = false;
   bool busy = false;
   bool giphyHasMore = false;
@@ -257,7 +259,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
   }
 
   void _switchTab(bool giphySelected) {
-    setState(() { giphyTab = giphySelected; selectedIndex = 0; giphyNavigating = false; });
+    setState(() { giphyTab = giphySelected; openverseTab = false; selectedIndex = 0; giphyNavigating = false; });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) (giphySelected ? giphyFocus : searchFocus).requestFocus();
     });
@@ -283,7 +285,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
     try {
       await windowManager.hide();
       searchController.clear();
-      setState(() { picker = true; giphyTab = false; selectedFolder = null; favoritesOnly = false; selectedIndex = 0; });
+      setState(() { picker = true; giphyTab = false; openverseTab = false; selectedFolder = null; favoritesOnly = false; selectedIndex = 0; });
       await windowManager.setAsFrameless();
       await windowManager.setResizable(false);
       await windowManager.setSkipTaskbar(true);
@@ -489,6 +491,14 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
     return items;
   }
 
+  void _switchMainTab(int tab) {
+    if (tab == 2) {
+      setState(() { openverseTab = true; giphyTab = false; });
+    } else {
+      _switchTab(tab == 1);
+    }
+  }
+
   Future<void> _importClipboardFiles() async {
     try {
       final paths = await Pasteboard.files();
@@ -555,8 +565,8 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
             ] else TextButton(onPressed: () => unawaited(widget.cloud!.syncNow()), child: const Text('Retry')),
           ],
         ),
-        if (!picker) Padding(padding: const EdgeInsets.fromLTRB(16, 8, 16, 4), child: SegmentedButton<bool>(segments: const [ButtonSegment(value: false, label: Text('Library'), icon: Icon(Icons.collections_outlined)), ButtonSegment(value: true, label: Text('GIPHY'), icon: Icon(Icons.search))], selected: {giphyTab}, onSelectionChanged: (v) => _switchTab(v.first))),
-        if (giphyTab && !picker) Expanded(child: _giphyView()) else Expanded(child: _libraryView(wide)),
+        if (!picker) Padding(padding: const EdgeInsets.fromLTRB(16, 8, 16, 4), child: SegmentedButton<int>(segments: const [ButtonSegment(value: 0, label: Text('Library'), icon: Icon(Icons.collections_outlined)), ButtonSegment(value: 1, label: Text('GIPHY'), icon: Icon(Icons.search)), ButtonSegment(value: 2, label: Text('Saveable'), icon: Icon(Icons.download_outlined))], selected: {openverseTab ? 2 : giphyTab ? 1 : 0}, onSelectionChanged: (v) => _switchMainTab(v.first))),
+        if (openverseTab && !picker) Expanded(child: OpenversePanel(store: widget.store, folderId: selectedFolder)) else if (giphyTab && !picker) Expanded(child: _giphyView()) else Expanded(child: _libraryView(wide)),
       ])),
     ]);
     return Scaffold(
@@ -711,8 +721,9 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
       Padding(padding: const EdgeInsets.only(left: 10), child: Row(children: [Expanded(child: Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis)), if (!picker) PopupMenuButton<String>(tooltip: 'Item options', onSelected: (action) async {
         if (action == 'rename') { final name = await _askName('Rename item', initial: item.name); if (name != null) await widget.store.updateItem(item, name: name); }
         if (action == 'delete') await widget.store.deleteItem(item);
+        if (action == 'source' && item.sourcePage != null) { await Clipboard.setData(ClipboardData(text: item.sourcePage!)); _showError('Source link copied · ${item.licenseLabel ?? 'Open license'}'); }
         if (action.startsWith('move:')) await widget.store.updateItem(item, move: true, folderId: action.substring(5).isEmpty ? null : action.substring(5));
-      }, itemBuilder: (_) => [const PopupMenuItem(value: 'rename', child: Text('Rename')), const PopupMenuItem(value: 'move:', child: Text('Move to All items')), ...widget.store.folders.map((folder) => PopupMenuItem(value: 'move:${folder.id}', child: Text('Move to ${folder.name}'))), const PopupMenuItem(value: 'delete', child: Text('Delete'))])])),
+      }, itemBuilder: (_) => [const PopupMenuItem(value: 'rename', child: Text('Rename')), if (item.sourcePage != null) PopupMenuItem(value: 'source', child: Text('Copy source · ${item.licenseLabel ?? 'Open license'}')), const PopupMenuItem(value: 'move:', child: Text('Move to All items')), ...widget.store.folders.map((folder) => PopupMenuItem(value: 'move:${folder.id}', child: Text('Move to ${folder.name}'))), const PopupMenuItem(value: 'delete', child: Text('Delete'))])])),
     ]),
   ));
 
@@ -739,6 +750,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WindowListener {
     const SizedBox(height: 8),
     if (busy) const LinearProgressIndicator(minHeight: 2),
     if (error != null) Padding(padding: const EdgeInsets.all(12), child: Text(error!, style: const TextStyle(color: Colors.redAccent))),
+    if (!compact) Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: Align(alignment: Alignment.centerRight, child: TextButton.icon(onPressed: () => _switchMainTab(2), icon: const Icon(Icons.download_outlined, size: 18), label: const Text('Find GIFs you can save')))),
     Expanded(child: !giphy.configured
       ? const Center(child: Padding(padding: EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.key_outlined, size: 42, color: Colors.white54), SizedBox(height: 12), Text('Add a GIPHY API key to search', style: TextStyle(fontSize: 16)), SizedBox(height: 6), Text('See README.md for setup', style: TextStyle(color: Colors.white60))])))
       : results.isEmpty
