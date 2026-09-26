@@ -103,6 +103,40 @@ void main() {
     );
   });
 
+  test('bulk tags and folder moves persist for selected items', () async {
+    final source = File('${sandbox.path}${Platform.pathSeparator}sample.png');
+    await source.writeAsBytes([1, 2, 3]);
+    await store.importFiles([source.path, source.path]);
+    await store.addFolder('Grouped');
+    final selected = store.items.toList();
+    await store.addTagToItems(selected, '  Reaction  ');
+    await store.addTagToItems(selected, 'reaction');
+    expect(selected.map((item) => item.tags), everyElement(['Reaction']));
+    await store.moveItems(selected, store.folders.single.id);
+    expect(
+      selected.map((item) => item.folderId),
+      everyElement(store.folders.single.id),
+    );
+    await store.removeTagFromItems([selected.first], 'reaction');
+    expect(selected.first.tags, isEmpty);
+    expect(selected.last.tags, ['Reaction']);
+    expect(store.dirtyItems, containsAll(selected.map((item) => item.id)));
+  });
+
+  test('bulk deletion records tombstones and removes selected media', () async {
+    final source = File('${sandbox.path}${Platform.pathSeparator}sample.gif');
+    await source.writeAsBytes([71, 73, 70]);
+    await store.importFiles([source.path, source.path]);
+    final selected = store.items.toList();
+    final files = selected.map(store.fileFor).toList();
+    await store.deleteItems(selected);
+    expect(store.items, isEmpty);
+    expect(store.deletedItems, containsAll(selected.map((item) => item.id)));
+    for (final file in files) {
+      expect(await file.exists(), isFalse);
+    }
+  });
+
   test('remote removal deletes a clean cached media file', () async {
     final source = File('${sandbox.path}${Platform.pathSeparator}sample.gif');
     await source.writeAsBytes([1, 2, 3]);

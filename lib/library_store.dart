@@ -33,18 +33,21 @@ class LibraryItem {
     required this.kind,
     this.folderId,
     this.favorite = false,
+    List<String> tags = const [],
     this.useCount = 0,
     this.sourceType = 'upload',
     String? sourceId,
     this.sourcePage,
     this.licenseLabel,
-  }) : sourceId = sourceId ?? id;
+  }) : tags = List<String>.of(tags),
+       sourceId = sourceId ?? id;
   final String id;
   String name;
   final String filename;
   final String kind;
   String? folderId;
   bool favorite;
+  List<String> tags;
   int useCount;
   final String sourceType;
   final String sourceId;
@@ -58,6 +61,7 @@ class LibraryItem {
     'kind': kind,
     'folderId': folderId,
     'favorite': favorite,
+    'tags': tags,
     'useCount': useCount,
     'sourceType': sourceType,
     'sourceId': sourceId,
@@ -71,6 +75,7 @@ class LibraryItem {
     kind: data['kind'] as String,
     folderId: data['folderId'] as String?,
     favorite: data['favorite'] as bool? ?? false,
+    tags: (data['tags'] as List<dynamic>? ?? []).cast<String>(),
     useCount: data['useCount'] as int? ?? 0,
     sourceType:
         data['sourceType'] as String? ??
@@ -312,12 +317,78 @@ class LibraryStore extends ChangeNotifier {
     String? folderId,
     bool move = false,
     bool? favorite,
+    List<String>? tags,
   }) async {
     if (name != null && name.trim().isNotEmpty) item.name = name.trim();
     if (move) item.folderId = folderId;
     if (favorite != null) item.favorite = favorite;
+    if (tags != null) item.tags = _cleanTags(tags);
     dirtyItems.add(item.id);
     await _save();
+  }
+
+  List<String> _cleanTags(Iterable<String> tags) {
+    final seen = <String>{};
+    return tags
+        .map((tag) => tag.trim())
+        .where((tag) => tag.isNotEmpty && seen.add(tag.toLowerCase()))
+        .toList();
+  }
+
+  Future<void> addTagToItems(Iterable<LibraryItem> selected, String tag) async {
+    final clean = tag.trim();
+    if (clean.isEmpty) return;
+    for (final item in selected) {
+      if (!items.contains(item)) continue;
+      final updated = _cleanTags([...item.tags, clean]);
+      if (updated.length == item.tags.length) continue;
+      item.tags = updated;
+      dirtyItems.add(item.id);
+    }
+    await _save();
+  }
+
+  Future<void> removeTagFromItems(
+    Iterable<LibraryItem> selected,
+    String tag,
+  ) async {
+    for (final item in selected) {
+      if (!items.contains(item)) continue;
+      final updated = item.tags
+          .where((entry) => entry.toLowerCase() != tag.toLowerCase())
+          .toList();
+      if (updated.length == item.tags.length) continue;
+      item.tags = updated;
+      dirtyItems.add(item.id);
+    }
+    await _save();
+  }
+
+  Future<void> moveItems(
+    Iterable<LibraryItem> selected,
+    String? folderId,
+  ) async {
+    if (folderId != null && !folders.any((folder) => folder.id == folderId)) {
+      throw ArgumentError.value(folderId, 'folderId', 'Folder does not exist');
+    }
+    for (final item in selected) {
+      if (!items.contains(item) || item.folderId == folderId) continue;
+      item.folderId = folderId;
+      dirtyItems.add(item.id);
+    }
+    await _save();
+  }
+
+  Future<void> deleteItems(Iterable<LibraryItem> selected) async {
+    final removed = selected.where(items.contains).toList();
+    for (final item in removed) {
+      items.remove(item);
+      dirtyItems.remove(item.id);
+      deletedItems.add(item.id);
+      final file = fileFor(item);
+      if (await file.exists()) await file.delete();
+    }
+    if (removed.isNotEmpty) await _save();
   }
 
   Future<void> markUsed(LibraryItem item) async {

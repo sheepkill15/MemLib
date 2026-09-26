@@ -83,11 +83,13 @@ class MemlibApp extends StatelessWidget {
     this.enableTray = true,
     this.initialShortcut,
     this.cloud,
+    this.giphyService,
   });
   final LibraryStore store;
   final bool enableTray;
   final HotKey? initialShortcut;
   final CloudController? cloud;
+  final GiphyService? giphyService;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -121,6 +123,7 @@ class MemlibApp extends StatelessWidget {
       cloud: cloud,
       enableTray: enableTray,
       initialShortcut: initialShortcut,
+      giphyService: giphyService,
     ),
   );
 }
@@ -132,11 +135,13 @@ class LibraryScreen extends StatefulWidget {
     this.enableTray = true,
     this.initialShortcut,
     this.cloud,
+    this.giphyService,
   });
   final LibraryStore store;
   final bool enableTray;
   final HotKey? initialShortcut;
   final CloudController? cloud;
+  final GiphyService? giphyService;
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -152,13 +157,22 @@ class _LibraryDrag {
 class _LibraryScreenState extends State<LibraryScreen>
     with WindowListener, WidgetsBindingObserver {
   final actions = MediaActions();
-  final giphy = GiphyService();
+  late final giphy = widget.giphyService ?? GiphyService();
   late final giphyLibrary = GiphyLibrary(widget.store, giphy.fetchForShare);
   final savingGiphy = <String>{};
   final searchController = TextEditingController();
   final giphyController = TextEditingController();
   final searchFocus = FocusNode();
   final giphyFocus = FocusNode();
+  final pickerScroll = ScrollController();
+  final giphyPickerScroll = ScrollController();
+  final libraryGridScroll = ScrollController();
+  final libraryGridKey = GlobalKey();
+  final selectedItemIds = <String>{};
+  String? selectionAnchorId;
+  bool mobileSelecting = false;
+  double pickerGridWidth = 620;
+  double giphyPickerGridWidth = 620;
   String? selectedFolder;
   final expandedFolders = <String>{};
   bool favoritesOnly = false;
@@ -263,6 +277,9 @@ class _LibraryScreenState extends State<LibraryScreen>
     giphyController.dispose();
     searchFocus.dispose();
     giphyFocus.dispose();
+    pickerScroll.dispose();
+    giphyPickerScroll.dispose();
+    libraryGridScroll.dispose();
     giphy.dispose();
     super.dispose();
   }
@@ -270,8 +287,12 @@ class _LibraryScreenState extends State<LibraryScreen>
   void _refresh() {
     if (!mounted) return;
     setState(() {
+      final activeIds = widget.store.items.map((item) => item.id).toSet();
+      selectedItemIds.removeWhere((id) => !activeIds.contains(id));
       if (shownAccountId != widget.store.accountId) {
         shownAccountId = widget.store.accountId;
+        selectedItemIds.clear();
+        selectionAnchorId = null;
         if (Platform.isAndroid) {
           unawaited(AndroidBridge.setLibraryRoot(widget.store));
         }
@@ -425,7 +446,7 @@ class _LibraryScreenState extends State<LibraryScreen>
         movePickerSelection(
           selectedIndex,
           giphyTab ? results.length : visibleItems.length,
-          4,
+          giphyTab ? _giphyPickerColumns : 4,
           direction,
         ),
       );
@@ -456,20 +477,39 @@ class _LibraryScreenState extends State<LibraryScreen>
     setState(() => selectedIndex = index);
     final itemsLength = giphyTab ? results.length : visibleItems.length;
     if (index < 0 || index >= itemsLength) return;
-    final id = giphyTab
-        ? 'giphy-${results[index].id}'
-        : 'picker-${visibleItems[index].id}';
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !picker) return;
-      final card = GlobalObjectKey(id).currentContext;
-      if (card != null) {
-        Scrollable.ensureVisible(
-          card,
-          duration: const Duration(milliseconds: 110),
-          alignment: 0.2,
-        );
-      }
+      if (!mounted || !picker || selectedIndex != index) return;
+      _scrollPickerSelectionIntoView(index);
     });
+  }
+
+  int get _giphyPickerColumns =>
+      ((giphyPickerGridWidth - 28) / (145 + 10)).ceil().clamp(1, 100);
+
+  void _scrollPickerSelectionIntoView(int index) {
+    final controller = giphyTab ? giphyPickerScroll : pickerScroll;
+    if (!controller.hasClients) return;
+    final columns = giphyTab ? _giphyPickerColumns : 4;
+    final width = giphyTab ? giphyPickerGridWidth : pickerGridWidth;
+    final tileWidth = (width - 28 - (columns - 1) * 10) / columns;
+    final tileHeight = giphyTab ? tileWidth / 0.94 : tileWidth;
+    final top = (giphyTab ? 4.0 : 0.0) + (index ~/ columns) * (tileHeight + 10);
+    final bottom = top + tileHeight;
+    final position = controller.position;
+    const margin = 8.0;
+    double? destination;
+    if (top < position.pixels + margin) {
+      destination = top - margin;
+    } else if (bottom > position.pixels + position.viewportDimension - margin) {
+      destination = bottom - position.viewportDimension + margin;
+    }
+    if (destination != null) {
+      controller.animateTo(
+        destination.clamp(position.minScrollExtent, position.maxScrollExtent),
+        duration: const Duration(milliseconds: 110),
+        curve: Curves.easeOut,
+      );
+    }
   }
 
   void _switchTab(bool giphySelected) {
@@ -477,10 +517,20 @@ class _LibraryScreenState extends State<LibraryScreen>
       giphyTab = giphySelected;
       selectedIndex = 0;
       giphyNavigating = false;
+      selectedItemIds.clear();
+      selectionAnchorId = null;
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) (giphySelected ? giphyFocus : searchFocus).requestFocus();
+      if (!mounted) return;
+      (giphySelected ? giphyFocus : searchFocus).requestFocus();
+      final scroll = giphySelected ? giphyPickerScroll : pickerScroll;
+      if (scroll.hasClients) scroll.jumpTo(0);
     });
+  }
+
+  void _resetPickerList() {
+    selectedIndex = 0;
+    if (pickerScroll.hasClients) pickerScroll.jumpTo(0);
   }
 
   Future<void> _togglePicker({bool fromShortcut = false}) async {
@@ -521,7 +571,10 @@ class _LibraryScreenState extends State<LibraryScreen>
       await windowManager.show();
       await windowManager.focus();
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && picker) searchFocus.requestFocus();
+        if (mounted && picker) {
+          searchFocus.requestFocus();
+          if (pickerScroll.hasClients) pickerScroll.jumpTo(0);
+        }
       });
     } finally {
       windowTransition = false;
@@ -784,6 +837,7 @@ class _LibraryScreenState extends State<LibraryScreen>
     if (query.isEmpty || (more && !giphyHasMore)) return;
     final offset = more ? giphyOffset : 0;
     final request = ++giphyRequest;
+    if (!more && giphyPickerScroll.hasClients) giphyPickerScroll.jumpTo(0);
     setState(() {
       busy = true;
       error = null;
@@ -884,6 +938,8 @@ class _LibraryScreenState extends State<LibraryScreen>
     selectedFolder = id;
     favoritesOnly = false;
     selectedIndex = 0;
+    selectedItemIds.clear();
+    selectionAnchorId = null;
     var parent = widget.store.folders.where((e) => e.id == id).firstOrNull;
     while (parent?.parentId != null) {
       expandedFolders.add(parent!.parentId!);
@@ -961,7 +1017,8 @@ class _LibraryScreenState extends State<LibraryScreen>
         ),
       ),
     );
-    if (Platform.isAndroid) {
+    if (Theme.of(context).platform == TargetPlatform.android) {
+      if (!data.folder) return child;
       return LongPressDraggable<_LibraryDrag>(
         data: data,
         feedback: feedback,
@@ -987,7 +1044,9 @@ class _LibraryScreenState extends State<LibraryScreen>
                   favoritesOnly ||
                   item.folderId == selectedFolder) &&
               (!favoritesOnly || item.favorite) &&
-              (query.isEmpty || item.name.toLowerCase().contains(query)),
+              (query.isEmpty ||
+                  item.name.toLowerCase().contains(query) ||
+                  item.tags.any((tag) => tag.toLowerCase().contains(query))),
         )
         .toList();
     items.sort((a, b) {
@@ -995,6 +1054,243 @@ class _LibraryScreenState extends State<LibraryScreen>
       return b.useCount.compareTo(a.useCount);
     });
     return items;
+  }
+
+  List<LibraryItem> get selectedItems => widget.store.items
+      .where((item) => selectedItemIds.contains(item.id))
+      .toList();
+
+  void _clearSelection() => setState(() {
+    selectedItemIds.clear();
+    selectionAnchorId = null;
+  });
+
+  void _selectLibraryItem(LibraryItem item, {bool checkbox = false}) {
+    final keyboard = HardwareKeyboard.instance;
+    final shift = Platform.isWindows && keyboard.isShiftPressed;
+    final control =
+        Platform.isWindows &&
+        (keyboard.isControlPressed || keyboard.isMetaPressed);
+    final order = visibleItems;
+    setState(() {
+      if (shift) {
+        final from = order.indexWhere((entry) => entry.id == selectionAnchorId);
+        final to = order.indexWhere((entry) => entry.id == item.id);
+        if (from >= 0 && to >= 0) {
+          if (!control) selectedItemIds.clear();
+          final low = from < to ? from : to;
+          final high = from > to ? from : to;
+          for (var i = low; i <= high; i++) {
+            selectedItemIds.add(order[i].id);
+          }
+          return;
+        }
+      }
+      if (control || checkbox) {
+        if (!selectedItemIds.add(item.id)) selectedItemIds.remove(item.id);
+      } else {
+        selectedItemIds
+          ..clear()
+          ..add(item.id);
+      }
+      selectionAnchorId = item.id;
+    });
+  }
+
+  void _selectItemAt(Offset globalPosition) {
+    if (!mobileSelecting || !libraryGridScroll.hasClients) return;
+    final box = libraryGridKey.currentContext?.findRenderObject();
+    if (box is! RenderBox) return;
+    final local = box.globalToLocal(globalPosition);
+    if (local.dx < 0 || local.dx > box.size.width) return;
+    final position = libraryGridScroll.position;
+    if (local.dy < 32 && position.pixels > position.minScrollExtent) {
+      libraryGridScroll.jumpTo(
+        (position.pixels - 20).clamp(
+          position.minScrollExtent,
+          position.maxScrollExtent,
+        ),
+      );
+    } else if (local.dy > box.size.height - 32 &&
+        position.pixels < position.maxScrollExtent) {
+      libraryGridScroll.jumpTo(
+        (position.pixels + 20).clamp(
+          position.minScrollExtent,
+          position.maxScrollExtent,
+        ),
+      );
+    }
+    final width = box.size.width - 32;
+    final columns = (width / (190 + 12)).ceil().clamp(1, 100);
+    final tileWidth = (width - (columns - 1) * 12) / columns;
+    final strideY = tileWidth / 0.85 + 12;
+    final column = ((local.dx - 16) / (tileWidth + 12)).floor();
+    final row = ((local.dy + position.pixels) / strideY).floor();
+    if (column < 0 || column >= columns || row < 0) return;
+    final index = row * columns + column - visibleFolders.length;
+    final items = visibleItems;
+    if (index >= 0 && index < items.length) {
+      setState(() => selectedItemIds.add(items[index].id));
+    }
+  }
+
+  Future<String?> _chooseMoveFolder() => showDialog<String>(
+    context: context,
+    builder: (context) {
+      final tiles = <Widget>[];
+      final visited = <String>{};
+      void addChildren(String? parentId, int depth) {
+        for (final folder in foldersIn(parentId)) {
+          if (!visited.add(folder.id)) continue;
+          tiles.add(
+            ListTile(
+              contentPadding: EdgeInsets.only(
+                left: 16.0 + depth * 18,
+                right: 16,
+              ),
+              leading: const Icon(Icons.folder_outlined),
+              title: Text(folder.name),
+              onTap: () => Navigator.pop(context, folder.id),
+            ),
+          );
+          addChildren(folder.id, depth + 1);
+        }
+      }
+
+      addChildren(null, 0);
+      return AlertDialog(
+        title: const Text('Move selected items'),
+        content: SizedBox(
+          width: 360,
+          height: 360,
+          child: ListView(
+            children: [
+              ListTile(
+                leading: const Icon(Icons.home_outlined),
+                title: const Text('Library root'),
+                onTap: () => Navigator.pop(context, ''),
+              ),
+              ...tiles,
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+        ],
+      );
+    },
+  );
+
+  Widget _selectionToolbar() {
+    final items = selectedItems;
+    final tags = items.expand((item) => item.tags).toSet().toList()..sort();
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2D2540),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF665286)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text(
+                '${items.length} selected',
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              TextButton.icon(
+                icon: const Icon(Icons.sell_outlined, size: 18),
+                label: const Text('Add tag'),
+                onPressed: () async {
+                  final tag = await _askName(
+                    'Add tag to ${items.length} items',
+                  );
+                  if (tag != null) await widget.store.addTagToItems(items, tag);
+                },
+              ),
+              TextButton.icon(
+                icon: const Icon(Icons.drive_file_move_outline, size: 18),
+                label: const Text('Move'),
+                onPressed: () async {
+                  final folder = await _chooseMoveFolder();
+                  if (folder == null) return;
+                  await widget.store.moveItems(
+                    items,
+                    folder.isEmpty ? null : folder,
+                  );
+                  _clearSelection();
+                },
+              ),
+              TextButton.icon(
+                icon: const Icon(Icons.delete_outline, size: 18),
+                label: const Text('Delete'),
+                onPressed: () async {
+                  final confirmed = await showDialog<bool>(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: Text('Delete ${items.length} items?'),
+                      content: const Text(
+                        'This removes the selected media from your library.',
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context, false),
+                          child: const Text('Cancel'),
+                        ),
+                        FilledButton(
+                          onPressed: () => Navigator.pop(context, true),
+                          child: const Text('Delete'),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (confirmed == true) {
+                    await widget.store.deleteItems(items);
+                    _clearSelection();
+                  }
+                },
+              ),
+              IconButton(
+                tooltip: 'Clear selection',
+                icon: const Icon(Icons.close),
+                onPressed: _clearSelection,
+              ),
+            ],
+          ),
+          if (tags.isNotEmpty) ...[
+            const SizedBox(height: 5),
+            SizedBox(
+              height: 36,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                children: [
+                  for (final tag in tags)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: InputChip(
+                        label: Text(tag),
+                        onDeleted: () =>
+                            widget.store.removeTagFromItems(items, tag),
+                        deleteIcon: const Icon(Icons.close, size: 16),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 
   void _switchMainTab(int tab) => _switchTab(tab == 1);
@@ -1376,7 +1672,7 @@ class _LibraryScreenState extends State<LibraryScreen>
               child: TextField(
                 focusNode: searchFocus,
                 controller: searchController,
-                onChanged: (_) => setState(() => selectedIndex = 0),
+                onChanged: (_) => setState(_resetPickerList),
                 decoration: InputDecoration(
                   prefixIcon: const Icon(Icons.search),
                   hintText: 'Find a sticker or GIF',
@@ -1402,7 +1698,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                     onSelected: (_) => setState(() {
                       selectedFolder = null;
                       favoritesOnly = false;
-                      selectedIndex = 0;
+                      _resetPickerList();
                     }),
                   ),
                   const SizedBox(width: 7),
@@ -1412,7 +1708,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                     onSelected: (_) => setState(() {
                       selectedFolder = null;
                       favoritesOnly = true;
-                      selectedIndex = 0;
+                      _resetPickerList();
                     }),
                   ),
                   ...widget.store.folders.map(
@@ -1424,7 +1720,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                         onSelected: (_) => setState(() {
                           selectedFolder = folder.id;
                           favoritesOnly = false;
-                          selectedIndex = 0;
+                          _resetPickerList();
                         }),
                       ),
                     ),
@@ -1441,20 +1737,26 @@ class _LibraryScreenState extends State<LibraryScreen>
                         style: TextStyle(color: Colors.white60),
                       ),
                     )
-                  : GridView.builder(
-                      padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-                      gridDelegate:
-                          const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 4,
-                            childAspectRatio: 1.0,
-                            crossAxisSpacing: 10,
-                            mainAxisSpacing: 10,
+                  : LayoutBuilder(
+                      builder: (context, constraints) {
+                        pickerGridWidth = constraints.maxWidth;
+                        return GridView.builder(
+                          controller: pickerScroll,
+                          padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+                          gridDelegate:
+                              const SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 4,
+                                childAspectRatio: 1.0,
+                                crossAxisSpacing: 10,
+                                mainAxisSpacing: 10,
+                              ),
+                          itemCount: items.length,
+                          itemBuilder: (context, index) => _itemCard(
+                            items[index],
+                            selected: index == selectedIndex,
                           ),
-                      itemCount: items.length,
-                      itemBuilder: (context, index) => _itemCard(
-                        items[index],
-                        selected: index == selectedIndex,
-                      ),
+                        );
+                      },
                     ),
             ),
           ],
@@ -1576,6 +1878,8 @@ class _LibraryScreenState extends State<LibraryScreen>
           onTap: () => setState(() {
             selectedFolder = null;
             favoritesOnly = true;
+            selectedItemIds.clear();
+            selectionAnchorId = null;
           }),
         ),
         const Divider(),
@@ -1712,10 +2016,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                 ChoiceChip(
                   label: const Text('Library root'),
                   selected: selectedFolder == null && !favoritesOnly,
-                  onSelected: (_) => setState(() {
-                    selectedFolder = null;
-                    favoritesOnly = false;
-                  }),
+                  onSelected: (_) => _openFolder(null),
                 ),
               ),
               const SizedBox(width: 8),
@@ -1725,6 +2026,8 @@ class _LibraryScreenState extends State<LibraryScreen>
                 onSelected: (_) => setState(() {
                   selectedFolder = null;
                   favoritesOnly = true;
+                  selectedItemIds.clear();
+                  selectionAnchorId = null;
                 }),
               ),
               ...foldersIn(null).map(
@@ -1733,10 +2036,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                   child: ChoiceChip(
                     label: Text(folder.name),
                     selected: selectedFolder == folder.id,
-                    onSelected: (_) => setState(() {
-                      selectedFolder = folder.id;
-                      favoritesOnly = false;
-                    }),
+                    onSelected: (_) => _openFolder(folder.id),
                   ),
                 ),
               ),
@@ -1748,7 +2048,10 @@ class _LibraryScreenState extends State<LibraryScreen>
         child: TextField(
           focusNode: searchFocus,
           controller: searchController,
-          onChanged: (_) => setState(() {}),
+          onChanged: (_) => setState(() {
+            selectedItemIds.clear();
+            selectionAnchorId = null;
+          }),
           decoration: InputDecoration(
             prefixIcon: const Icon(Icons.search),
             hintText: 'Search across all folders',
@@ -1756,6 +2059,7 @@ class _LibraryScreenState extends State<LibraryScreen>
           ),
         ),
       ),
+      if (selectedItemIds.isNotEmpty) _selectionToolbar(),
       Expanded(
         child: visibleItems.isEmpty && visibleFolders.isEmpty
             ? Center(
@@ -1821,6 +2125,8 @@ class _LibraryScreenState extends State<LibraryScreen>
                 ),
               )
             : GridView.builder(
+                key: libraryGridKey,
+                controller: libraryGridScroll,
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
                 gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
                   maxCrossAxisExtent: picker ? 140 : 190,
@@ -1917,162 +2223,234 @@ class _LibraryScreenState extends State<LibraryScreen>
     );
   }
 
-  Widget _itemCard(LibraryItem item, {bool selected = false}) => Card(
-    key: picker
-        ? GlobalObjectKey('picker-${item.id}')
-        : ValueKey('item-card-${item.id}'),
-    clipBehavior: Clip.antiAlias,
-    margin: EdgeInsets.zero,
-    shape: RoundedRectangleBorder(
-      borderRadius: BorderRadius.circular(12),
-      side: BorderSide(
-        color: selected ? const Color(0xFFBDA7FF) : Colors.transparent,
-        width: selected ? 2 : 0,
+  Widget _itemCard(LibraryItem item, {bool selected = false}) {
+    final card = Card(
+      key: picker
+          ? ValueKey('picker-${item.id}')
+          : ValueKey('item-card-${item.id}'),
+      clipBehavior: Clip.antiAlias,
+      margin: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: selected || (!picker && selectedItemIds.contains(item.id))
+              ? const Color(0xFFBDA7FF)
+              : Colors.transparent,
+          width: selected || (!picker && selectedItemIds.contains(item.id))
+              ? 2
+              : 0,
+        ),
       ),
-    ),
-    child: InkWell(
-      onTap: () => _useItem(item),
-      child: Column(
-        children: [
-          Expanded(
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: Image.file(
-                    widget.store.fileFor(item),
-                    fit: BoxFit.contain,
-                    errorBuilder: (_, _, _) =>
-                        const Icon(Icons.broken_image_outlined),
+      child: InkWell(
+        onTap: () {
+          if (picker) {
+            _useItem(item);
+          } else if (selectedItemIds.isNotEmpty ||
+              (Platform.isWindows &&
+                  (HardwareKeyboard.instance.isShiftPressed ||
+                      HardwareKeyboard.instance.isControlPressed ||
+                      HardwareKeyboard.instance.isMetaPressed))) {
+            _selectLibraryItem(item);
+          } else {
+            _useItem(item);
+          }
+        },
+        child: Column(
+          children: [
+            Expanded(
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Image.file(
+                      widget.store.fileFor(item),
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, _, _) =>
+                          const Icon(Icons.broken_image_outlined),
+                    ),
                   ),
-                ),
-                if (item.sourceType == 'giphy')
-                  const Positioned(
-                    left: 5,
-                    bottom: 5,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: Color(0xD91B1724),
-                        borderRadius: BorderRadius.all(Radius.circular(5)),
-                      ),
-                      child: Padding(
-                        padding: EdgeInsets.symmetric(
-                          horizontal: 5,
-                          vertical: 2,
+                  if (item.sourceType == 'giphy')
+                    const Positioned(
+                      left: 5,
+                      bottom: 5,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: Color(0xD91B1724),
+                          borderRadius: BorderRadius.all(Radius.circular(5)),
                         ),
-                        child: Text(
-                          'GIPHY',
-                          style: TextStyle(
-                            fontSize: 9,
-                            fontWeight: FontWeight.bold,
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: 5,
+                            vertical: 2,
+                          ),
+                          child: Text(
+                            'GIPHY',
+                            style: TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ),
                       ),
                     ),
+                  if (!picker)
+                    Positioned(
+                      top: 2,
+                      left: 2,
+                      child: SizedBox(
+                        width: 40,
+                        height: 40,
+                        child: Checkbox(
+                          key: ValueKey('select-${item.id}'),
+                          value: selectedItemIds.contains(item.id),
+                          onChanged: (_) =>
+                              _selectLibraryItem(item, checkbox: true),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ),
+                    ),
+                  Positioned(
+                    top: 2,
+                    right: 2,
+                    child: IconButton.filledTonal(
+                      tooltip: item.favorite
+                          ? 'Remove favourite'
+                          : 'Add favourite',
+                      iconSize: 18,
+                      icon: Icon(
+                        item.favorite ? Icons.star : Icons.star_border,
+                      ),
+                      onPressed: () => widget.store.updateItem(
+                        item,
+                        favorite: !item.favorite,
+                      ),
+                    ),
                   ),
-                Positioned(
-                  top: 2,
-                  right: 2,
-                  child: IconButton.filledTonal(
-                    tooltip: item.favorite
-                        ? 'Remove favourite'
-                        : 'Add favourite',
-                    iconSize: 18,
-                    icon: Icon(item.favorite ? Icons.star : Icons.star_border),
-                    onPressed: () =>
-                        widget.store.updateItem(item, favorite: !item.favorite),
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(left: 10),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    item.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+            Padding(
+              padding: const EdgeInsets.only(left: 10),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      item.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
-                ),
-                if (!picker)
-                  PopupMenuButton<String>(
-                    tooltip: 'Item options',
-                    onSelected: (action) async {
-                      if (action == 'rename') {
-                        final name = await _askName(
-                          'Rename item',
-                          initial: item.name,
-                        );
-                        if (name != null) {
-                          await widget.store.updateItem(item, name: name);
+                  if (!picker)
+                    PopupMenuButton<String>(
+                      tooltip: 'Item options',
+                      onSelected: (action) async {
+                        if (action == 'rename') {
+                          final name = await _askName(
+                            'Rename item',
+                            initial: item.name,
+                          );
+                          if (name != null) {
+                            await widget.store.updateItem(item, name: name);
+                          }
                         }
-                      }
-                      if (action == 'delete') {
-                        await widget.store.deleteItem(item);
-                      }
-                      if (action == 'source' && item.sourcePage != null) {
-                        await Clipboard.setData(
-                          ClipboardData(text: item.sourcePage!),
-                        );
-                        _showError('Source link copied');
-                      }
-                      if (action == 'share' && Platform.isAndroid) {
-                        await AndroidBridge.shareFile(
-                          widget.store.fileFor(item),
-                        );
-                      }
-                      if (action.startsWith('move:')) {
-                        await widget.store.updateItem(
-                          item,
-                          move: true,
-                          folderId: action.substring(5).isEmpty
-                              ? null
-                              : action.substring(5),
-                        );
-                      }
-                    },
-                    itemBuilder: (_) => [
-                      const PopupMenuItem(
-                        value: 'rename',
-                        child: Text('Rename'),
-                      ),
-                      if (Platform.isAndroid)
+                        if (action == 'delete') {
+                          await widget.store.deleteItem(item);
+                        }
+                        if (action == 'source' && item.sourcePage != null) {
+                          await Clipboard.setData(
+                            ClipboardData(text: item.sourcePage!),
+                          );
+                          _showError('Source link copied');
+                        }
+                        if (action == 'share' && Platform.isAndroid) {
+                          await AndroidBridge.shareFile(
+                            widget.store.fileFor(item),
+                          );
+                        }
+                        if (action.startsWith('move:')) {
+                          await widget.store.updateItem(
+                            item,
+                            move: true,
+                            folderId: action.substring(5).isEmpty
+                                ? null
+                                : action.substring(5),
+                          );
+                        }
+                      },
+                      itemBuilder: (_) => [
                         const PopupMenuItem(
-                          value: 'share',
-                          child: Text('Share to another app'),
+                          value: 'rename',
+                          child: Text('Rename'),
                         ),
-                      if (item.sourcePage != null)
+                        if (Platform.isAndroid)
+                          const PopupMenuItem(
+                            value: 'share',
+                            child: Text('Share to another app'),
+                          ),
+                        if (item.sourcePage != null)
+                          const PopupMenuItem(
+                            value: 'source',
+                            child: Text('Copy source link'),
+                          ),
                         const PopupMenuItem(
-                          value: 'source',
-                          child: Text('Copy source link'),
+                          value: 'move:',
+                          child: Text('Move to All items'),
                         ),
-                      const PopupMenuItem(
-                        value: 'move:',
-                        child: Text('Move to All items'),
-                      ),
-                      ...widget.store.folders.map(
-                        (folder) => PopupMenuItem(
-                          value: 'move:${folder.id}',
-                          child: Text('Move to ${folder.name}'),
+                        ...widget.store.folders.map(
+                          (folder) => PopupMenuItem(
+                            value: 'move:${folder.id}',
+                            child: Text('Move to ${folder.name}'),
+                          ),
                         ),
-                      ),
-                      const PopupMenuItem(
-                        value: 'delete',
-                        child: Text('Delete'),
-                      ),
-                    ],
-                  ),
-              ],
+                        const PopupMenuItem(
+                          value: 'delete',
+                          child: Text('Delete'),
+                        ),
+                      ],
+                    ),
+                ],
+              ),
             ),
-          ),
-        ],
+            if (!picker && item.tags.isNotEmpty)
+              SizedBox(
+                height: 19,
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    child: Text(
+                      item.tags.map((tag) => '#$tag').join('  '),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 10,
+                        color: Color(0xFFBDA7FF),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+    if (!picker && Theme.of(context).platform == TargetPlatform.android) {
+      return GestureDetector(
+        onLongPressStart: (_) => setState(() {
+          mobileSelecting = true;
+          selectedItemIds.add(item.id);
+          selectionAnchorId = item.id;
+        }),
+        onLongPressMoveUpdate: (details) =>
+            _selectItemAt(details.globalPosition),
+        onLongPressEnd: (_) => mobileSelecting = false,
+        onLongPressCancel: () => mobileSelecting = false,
+        child: card,
+      );
+    }
+    return card;
+  }
 
   Widget _giphyView({bool compact = false}) => Column(
     children: [
@@ -2201,117 +2579,151 @@ class _LibraryScreenState extends State<LibraryScreen>
                   style: const TextStyle(color: Colors.white60),
                 ),
               )
-            : GridView.builder(
-                padding: EdgeInsets.fromLTRB(
-                  compact ? 14 : 16,
-                  4,
-                  compact ? 14 : 16,
-                  12,
-                ),
-                gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-                  maxCrossAxisExtent: compact ? 145 : 180,
-                  childAspectRatio: 0.94,
-                  crossAxisSpacing: 10,
-                  mainAxisSpacing: 10,
-                ),
-                itemCount: results.length,
-                itemBuilder: (context, index) {
-                  final item = results[index];
-                  final selected = compact && index == selectedIndex;
-                  final saved = giphyLibrary.savedItem(item);
-                  final saving = savingGiphy.contains(item.id);
-                  return Card(
-                    key: compact ? GlobalObjectKey('giphy-${item.id}') : null,
-                    clipBehavior: Clip.antiAlias,
-                    margin: EdgeInsets.zero,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      side: BorderSide(
-                        color: selected
-                            ? const Color(0xFFBDA7FF)
-                            : Colors.transparent,
-                        width: selected ? 2 : 0,
-                      ),
+            : LayoutBuilder(
+                builder: (context, constraints) {
+                  if (compact) giphyPickerGridWidth = constraints.maxWidth;
+                  return GridView.builder(
+                    controller: compact ? giphyPickerScroll : null,
+                    padding: EdgeInsets.fromLTRB(
+                      compact ? 14 : 16,
+                      4,
+                      compact ? 14 : 16,
+                      12,
                     ),
-                    child: InkWell(
-                      onTap: busy ? null : () => _useGiphy(item),
-                      child: Column(
-                        children: [
-                          Expanded(
-                            child: Image.network(
-                              item.previewUrl,
-                              fit: BoxFit.cover,
-                              width: double.infinity,
-                              frameBuilder:
-                                  (context, child, frame, loadedSynchronously) {
-                                    if ((frame != null ||
-                                            loadedSynchronously) &&
-                                        seenGiphy.add(item.id)) {
-                                      unawaited(
-                                        giphy.track(item, GiphyAction.load),
-                                      );
-                                    }
-                                    return child;
-                                  },
-                              errorBuilder: (_, _, _) => const Center(
-                                child: Icon(Icons.broken_image_outlined),
-                              ),
-                            ),
+                    gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+                      maxCrossAxisExtent: compact ? 145 : 180,
+                      childAspectRatio: 0.94,
+                      crossAxisSpacing: 10,
+                      mainAxisSpacing: 10,
+                    ),
+                    itemCount: results.length,
+                    itemBuilder: (context, index) {
+                      final item = results[index];
+                      final selected = compact && index == selectedIndex;
+                      final saved = giphyLibrary.savedItem(item);
+                      final saving = savingGiphy.contains(item.id);
+                      return Card(
+                        key: compact ? ValueKey('giphy-${item.id}') : null,
+                        clipBehavior: Clip.antiAlias,
+                        margin: EdgeInsets.zero,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          side: BorderSide(
+                            color: selected
+                                ? const Color(0xFFBDA7FF)
+                                : Colors.transparent,
+                            width: selected ? 2 : 0,
                           ),
-                          Padding(
-                            padding: const EdgeInsets.only(left: 8, right: 4),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    item.title.isEmpty ? 'GIPHY' : item.title,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(fontSize: 11),
+                        ),
+                        child: InkWell(
+                          onTap: busy ? null : () => _useGiphy(item),
+                          child: Column(
+                            children: [
+                              Expanded(
+                                child: Image.network(
+                                  item.previewUrl,
+                                  fit: BoxFit.cover,
+                                  width: double.infinity,
+                                  frameBuilder:
+                                      (
+                                        context,
+                                        child,
+                                        frame,
+                                        loadedSynchronously,
+                                      ) {
+                                        if ((frame != null ||
+                                                loadedSynchronously) &&
+                                            seenGiphy.add(item.id)) {
+                                          unawaited(
+                                            giphy.track(item, GiphyAction.load),
+                                          );
+                                        }
+                                        return child;
+                                      },
+                                  errorBuilder: (_, _, _) => const Center(
+                                    child: Icon(Icons.broken_image_outlined),
                                   ),
                                 ),
-                                if (!compact &&
-                                    GiphyService.librarySavesEnabled) ...[
-                                  IconButton(
-                                    tooltip: saved == null
-                                        ? 'Save to library'
-                                        : 'Saved to library',
-                                    visualDensity: VisualDensity.compact,
-                                    iconSize: 19,
-                                    onPressed: saving || busy || saved != null
-                                        ? null
-                                        : () => _saveGiphy(item),
-                                    icon: Icon(
-                                      saved == null
-                                          ? Icons.download_outlined
-                                          : Icons.check_circle_outline,
+                              ),
+                              Padding(
+                                padding: const EdgeInsets.only(
+                                  left: 8,
+                                  right: 4,
+                                ),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        item.title.isEmpty
+                                            ? 'GIPHY'
+                                            : item.title,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(fontSize: 11),
+                                      ),
                                     ),
-                                  ),
-                                  IconButton(
-                                    tooltip: saved?.favorite == true
-                                        ? 'Remove favourite'
-                                        : 'Add favourite',
-                                    visualDensity: VisualDensity.compact,
-                                    iconSize: 19,
-                                    onPressed: saving || busy
-                                        ? null
-                                        : () => _saveGiphy(
-                                            item,
-                                            toggleFavorite: true,
-                                          ),
-                                    icon: Icon(
-                                      saved?.favorite == true
-                                          ? Icons.star
-                                          : Icons.star_border,
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ),
+                                    if (GiphyService.librarySavesEnabled) ...[
+                                      IconButton(
+                                        tooltip: saved == null
+                                            ? 'Save to library'
+                                            : 'Saved to library',
+                                        visualDensity: VisualDensity.compact,
+                                        constraints: compact
+                                            ? const BoxConstraints.tightFor(
+                                                width: 32,
+                                                height: 32,
+                                              )
+                                            : null,
+                                        padding: compact
+                                            ? EdgeInsets.zero
+                                            : null,
+                                        iconSize: compact ? 18 : 19,
+                                        onPressed:
+                                            saving || busy || saved != null
+                                            ? null
+                                            : () => _saveGiphy(item),
+                                        icon: Icon(
+                                          saved == null
+                                              ? Icons.download_outlined
+                                              : Icons.check_circle_outline,
+                                        ),
+                                      ),
+                                      IconButton(
+                                        tooltip: saved?.favorite == true
+                                            ? 'Remove favourite'
+                                            : 'Add favourite',
+                                        visualDensity: VisualDensity.compact,
+                                        constraints: compact
+                                            ? const BoxConstraints.tightFor(
+                                                width: 32,
+                                                height: 32,
+                                              )
+                                            : null,
+                                        padding: compact
+                                            ? EdgeInsets.zero
+                                            : null,
+                                        iconSize: compact ? 18 : 19,
+                                        onPressed: saving || busy
+                                            ? null
+                                            : () => _saveGiphy(
+                                                item,
+                                                toggleFavorite: true,
+                                              ),
+                                        icon: Icon(
+                                          saved?.favorite == true
+                                              ? Icons.star
+                                              : Icons.star_border,
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
-                    ),
+                        ),
+                      );
+                    },
                   );
                 },
               ),

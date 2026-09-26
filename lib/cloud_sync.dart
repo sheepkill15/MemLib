@@ -108,6 +108,7 @@ class SupabaseRemoteLibrary implements RemoteLibrary {
             kind: row['kind'] as String,
             folderId: row['folder_id'] as String?,
             favorite: row['favorite'] as bool? ?? false,
+            tags: (row['tags'] as List<dynamic>? ?? []).cast<String>(),
             useCount: row['use_count'] as int? ?? 0,
             sourceType: row['source_type'] as String? ?? 'upload',
             sourceId: row['source_id'] as String?,
@@ -181,6 +182,7 @@ class SupabaseRemoteLibrary implements RemoteLibrary {
           'source': 'upload',
           'storage_path': storagePath,
           'favorite': item.favorite,
+          'tags': item.tags,
           'use_count': item.useCount,
           'source_type': item.sourceType,
           'source_id': item.sourceId,
@@ -204,6 +206,7 @@ class SupabaseRemoteLibrary implements RemoteLibrary {
           'folder_id': item.folderId,
           'title': item.name,
           'favorite': item.favorite,
+          'tags': item.tags,
           'use_count': item.useCount,
         })
         .eq('owner_id', ownerId)

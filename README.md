@@ -14,9 +14,11 @@ When the Windows window is hidden, use the Memlib tray icon to reopen the librar
 
 The local library lives under the app support directory. Imported files are copied into app storage, so moving the original files does not break the library. On Windows, drag PNG, GIF, JPEG, or WebP files from Explorer into the library window, or copy those files in Explorer and press Ctrl+V while the library window is focused. They import into the selected folder; normal text pasting in search fields still works.
 
+In the main library, use the corner checkboxes to select items for bulk actions. Shift-click selects a range and Ctrl-click toggles individual items on Windows; on Android, long-press an item and drag across others to select them. The selection toolbar can add a custom tag, remove a tag, move items to a folder, or delete them. Search matches names and tags. The Windows quick picker keeps its one-click paste behavior, and its GIPHY results show save and favourite controls when GIPHY library saving is enabled.
+
 ## Supabase sign-in and sync
 
-Create a Supabase project, then apply [`supabase/migrations/0001_library.sql`](supabase/migrations/0001_library.sql), [`supabase/migrations/0002_item_source.sql`](supabase/migrations/0002_item_source.sql), and [`supabase/migrations/0003_source_identity.sql`](supabase/migrations/0003_source_identity.sql) in its SQL editor, in that order. Apply only migrations you have not already run. The app accepts the URL and **publishable** key through Dart defines:
+Create a Supabase project, then apply [`supabase/migrations/0001_library.sql`](supabase/migrations/0001_library.sql), [`supabase/migrations/0002_item_source.sql`](supabase/migrations/0002_item_source.sql), [`supabase/migrations/0003_source_identity.sql`](supabase/migrations/0003_source_identity.sql), and [`supabase/migrations/0004_item_tags.sql`](supabase/migrations/0004_item_tags.sql) in its SQL editor, in that order. Apply only migrations you have not already run. Apply `0004_item_tags.sql` before running a tags-enabled app with account sync. The app accepts the URL and **publishable** key through Dart defines:
 
 ```powershell
 flutter run -d windows --dart-define=SUPABASE_URL=https://YOUR_PROJECT.supabase.co --dart-define=SUPABASE_PUBLISHABLE_KEY=YOUR_PUBLISHABLE_KEY

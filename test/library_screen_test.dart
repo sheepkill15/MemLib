@@ -2,12 +2,44 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:memlib/library_store.dart';
 import 'package:memlib/main.dart';
+import 'package:memlib/giphy_service.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 
 class _MemoryStore extends LibraryStore {
+  @override
+  Future<LibraryItem> importBytes(
+    Uint8List bytes, {
+    required String name,
+    required String extension,
+    String? folderId,
+    String? sourceType,
+    String? sourceId,
+    String? sourcePage,
+    String? licenseLabel,
+    bool favorite = false,
+  }) async {
+    final item = LibraryItem(
+      id: 'saved-${sourceId ?? items.length}',
+      name: name,
+      filename: 'sample.$extension',
+      kind: 'gif',
+      folderId: folderId,
+      sourceType: sourceType ?? 'upload',
+      sourceId: sourceId,
+      sourcePage: sourcePage,
+      favorite: favorite,
+    );
+    items.add(item);
+    notifyListeners();
+    return item;
+  }
+
   @override
   Future<void> updateItem(
     LibraryItem item, {
@@ -15,10 +47,37 @@ class _MemoryStore extends LibraryStore {
     String? folderId,
     bool move = false,
     bool? favorite,
+    List<String>? tags,
   }) async {
     if (move) item.folderId = folderId;
     if (name != null) item.name = name;
     if (favorite != null) item.favorite = favorite;
+    if (tags != null) item.tags = tags;
+    notifyListeners();
+  }
+
+  @override
+  Future<void> addTagToItems(Iterable<LibraryItem> selected, String tag) async {
+    for (final item in selected) {
+      if (!item.tags.contains(tag)) item.tags.add(tag);
+    }
+    notifyListeners();
+  }
+
+  @override
+  Future<void> moveItems(
+    Iterable<LibraryItem> selected,
+    String? folderId,
+  ) async {
+    for (final item in selected) {
+      item.folderId = folderId;
+    }
+    notifyListeners();
+  }
+
+  @override
+  Future<void> deleteItems(Iterable<LibraryItem> selected) async {
+    items.removeWhere(selected.toSet().contains);
     notifyListeners();
   }
 }
@@ -91,6 +150,8 @@ void main() {
   testWidgets(
     'library root shows folders before loose items and opens subfolders',
     (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
       final store = _MemoryStore();
       final media = Directory.systemTemp.createTempSync('memlib-ui-media-');
       store.media = media;
@@ -145,8 +206,141 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Nested'), findsOneWidget);
       expect(tester.takeException(), isNull);
+      debugDefaultTargetPlatformOverride = null;
     },
   );
+
+  testWidgets('bulk selection honors Shift and Ctrl and applies a tag', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final store = _MemoryStore();
+    store.folders.add(LibraryFolder(id: 'destination', name: 'Destination'));
+    final media = Directory.systemTemp.createTempSync('memlib-select-media-');
+    store.media = media;
+    addTearDown(() => media.deleteSync(recursive: true));
+    File('${media.path}${Platform.pathSeparator}sample.png').writeAsBytesSync(
+      base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9hQ4sAAAAASUVORK5CYII=',
+      ),
+    );
+    for (var i = 0; i < 4; i++) {
+      store.items.add(
+        LibraryItem(
+          id: 'item$i',
+          name: 'Item $i',
+          filename: 'sample.png',
+          kind: 'sticker',
+        ),
+      );
+    }
+    await tester.pumpWidget(MemlibApp(store: store, enableTray: false));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('select-item0')));
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsOneWidget);
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.tap(find.byKey(const ValueKey('select-item2')));
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pumpAndSettle();
+    expect(find.text('3 selected'), findsOneWidget);
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.tap(find.byKey(const ValueKey('select-item1')));
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pumpAndSettle();
+    expect(find.text('2 selected'), findsOneWidget);
+
+    await tester.tap(find.text('Add tag'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).last, 'funny');
+    await tester.tap(find.text('Save').last);
+    await tester.pumpAndSettle();
+    expect(store.items[0].tags, ['funny']);
+    expect(store.items[1].tags, isEmpty);
+    expect(store.items[2].tags, ['funny']);
+
+    await tester.tap(find.text('Move'));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.text('Destination'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(store.items[0].folderId, 'destination');
+    expect(store.items[2].folderId, 'destination');
+    expect(find.text('2 selected'), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('folder-card-destination')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('select-item0')));
+    await tester.tap(find.byKey(const ValueKey('select-item2')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete'));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.text('Delete'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(store.items.map((item) => item.id), isNot(contains('item0')));
+    expect(store.items.map((item) => item.id), isNot(contains('item2')));
+    expect(tester.takeException(), isNull);
+  }, skip: !Platform.isWindows);
+
+  testWidgets('long press and drag selects adjacent items on mobile', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    tester.view.physicalSize = const Size(400, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final store = _MemoryStore();
+    final media = Directory.systemTemp.createTempSync('memlib-touch-select-');
+    store.media = media;
+    addTearDown(() => media.deleteSync(recursive: true));
+    File('${media.path}${Platform.pathSeparator}sample.png').writeAsBytesSync(
+      base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9hQ4sAAAAASUVORK5CYII=',
+      ),
+    );
+    for (var i = 0; i < 4; i++) {
+      store.items.add(
+        LibraryItem(
+          id: 'item$i',
+          name: 'Item $i',
+          filename: 'sample.png',
+          kind: 'sticker',
+        ),
+      );
+    }
+    await tester.pumpWidget(MemlibApp(store: store, enableTray: false));
+    await tester.pumpAndSettle();
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.byKey(const ValueKey('item-card-item0'))),
+    );
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(find.text('1 selected'), findsOneWidget);
+    await gesture.moveTo(
+      tester.getCenter(find.byKey(const ValueKey('item-card-item1'))),
+    );
+    await tester.pumpAndSettle();
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(find.text('2 selected'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  }, skip: !Platform.isWindows);
 
   testWidgets(
     'Windows quick picker opens without chrome and closes with Escape',
@@ -175,4 +369,153 @@ void main() {
     },
     skip: !Platform.isWindows,
   );
+
+  testWidgets(
+    'arrow navigation scrolls to a picker item beyond the built grid',
+    (tester) async {
+      final store = LibraryStore();
+      final media = Directory.systemTemp.createTempSync('memlib-picker-media-');
+      store.media = media;
+      addTearDown(() => media.deleteSync(recursive: true));
+      File('${media.path}${Platform.pathSeparator}sample.png').writeAsBytesSync(
+        base64Decode(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9hQ4sAAAAASUVORK5CYII=',
+        ),
+      );
+      for (var i = 0; i < 40; i++) {
+        store.items.add(
+          LibraryItem(
+            id: 'item$i',
+            name: 'Item $i',
+            filename: 'sample.png',
+            kind: 'sticker',
+          ),
+        );
+      }
+      await tester.pumpWidget(MemlibApp(store: store, enableTray: false));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.bolt));
+      await tester.pumpAndSettle();
+      final distant = find.text('Item 20');
+      expect(distant, findsNothing);
+
+      for (var i = 0; i < 5; i++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.pumpAndSettle();
+      }
+      expect(distant, findsOneWidget);
+      final viewport = tester.getRect(find.byType(GridView).first);
+      final selected = tester.getRect(distant);
+      expect(selected.top, greaterThanOrEqualTo(viewport.top));
+      expect(selected.bottom, lessThanOrEqualTo(viewport.bottom));
+      expect(tester.takeException(), isNull);
+    },
+    skip: !Platform.isWindows,
+  );
+
+  testWidgets('quick picker can save and favourite a GIPHY result', (
+    tester,
+  ) async {
+    final store = _MemoryStore();
+    final service = GiphyService(
+      apiKey: 'test-key',
+      client: MockClient((request) async {
+        if (request.url.path.endsWith('/search')) {
+          return http.Response(
+            jsonEncode({
+              'data': [
+                {
+                  'id': 'abc',
+                  'title': 'Wave',
+                  'images': {
+                    'fixed_width_small': {
+                      'url': 'https://example.test/preview.gif',
+                    },
+                    'original': {'url': 'https://example.test/full.gif'},
+                  },
+                },
+              ],
+              'pagination': {'count': 1, 'total_count': 1},
+            }),
+            200,
+          );
+        }
+        return http.Response.bytes([71, 73, 70, 56, 57, 97], 200);
+      }),
+    );
+    await tester.pumpWidget(
+      MemlibApp(store: store, enableTray: false, giphyService: service),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.bolt));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('GIPHY'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).last, 'wave');
+    await tester.tap(find.text('Search'));
+    await tester.pumpAndSettle();
+
+    expect(find.byTooltip('Save to library'), findsOneWidget);
+    expect(find.byTooltip('Add favourite'), findsOneWidget);
+    await tester.tap(find.byTooltip('Save to library'));
+    await tester.pumpAndSettle();
+    expect(store.items.single.sourceId, 'abc');
+    expect(find.byTooltip('Saved to library'), findsOneWidget);
+    await tester.tap(find.byTooltip('Add favourite'));
+    await tester.pumpAndSettle();
+    expect(store.items.single.favorite, isTrue);
+    expect(find.byTooltip('Remove favourite'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  }, skip: !Platform.isWindows || !GiphyService.librarySavesEnabled);
+
+  testWidgets('arrow navigation scrolls through distant GIPHY results', (
+    tester,
+  ) async {
+    final service = GiphyService(
+      apiKey: 'test-key',
+      client: MockClient(
+        (request) async => http.Response(
+          jsonEncode({
+            'data': [
+              for (var i = 0; i < 24; i++)
+                {
+                  'id': 'gif$i',
+                  'title': 'Result $i',
+                  'images': {
+                    'fixed_width_small': {
+                      'url': 'https://example.test/preview$i.gif',
+                    },
+                    'original': {'url': 'https://example.test/full$i.gif'},
+                  },
+                },
+            ],
+            'pagination': {'count': 24, 'total_count': 24},
+          }),
+          200,
+        ),
+      ),
+    );
+    await tester.pumpWidget(
+      MemlibApp(
+        store: LibraryStore(),
+        enableTray: false,
+        giphyService: service,
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.bolt));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('GIPHY'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).last, 'wave');
+    await tester.tap(find.text('Search'));
+    await tester.pumpAndSettle();
+    expect(find.text('Result 23'), findsNothing);
+    for (var i = 0; i < 10; i++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+    }
+    expect(find.text('Result 23'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  }, skip: !Platform.isWindows);
 }
