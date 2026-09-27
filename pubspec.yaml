@@ -49,6 +49,7 @@ dependencies:
   desktop_drop: ^0.8.4
   launch_at_startup: ^0.5.1
   archive: 4.3.0
+  package_info_plus: ^9.0.1
 
 dev_dependencies:
   flutter_test:

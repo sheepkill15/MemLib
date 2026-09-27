@@ -67,4 +67,7 @@ class AndroidBridge {
       _channel.invokeMethod<void>('importClipboardImage');
   static Future<void> shareFile(File file) =>
       _channel.invokeMethod<void>('shareFile', {'path': file.path});
+  static Future<bool> installApk(File file) async =>
+      await _channel.invokeMethod<bool>('installApk', {'path': file.path}) ??
+      false;
 }

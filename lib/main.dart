@@ -20,6 +20,7 @@ import 'cloud_controller.dart';
 import 'library_store.dart';
 import 'media_actions.dart';
 import 'picker_navigation.dart';
+import 'release_updater.dart';
 import 'shortcut_settings.dart';
 import 'windows_tray.dart';
 
@@ -274,6 +275,11 @@ class _LibraryScreenState extends State<LibraryScreen>
       );
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) unawaited(_drainAndroidPending());
+      });
+    }
+    if (Platform.isWindows || Platform.isAndroid) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_checkForUpdates(automatic: true));
       });
     }
     if (Platform.isWindows) {
@@ -1817,12 +1823,76 @@ class _LibraryScreenState extends State<LibraryScreen>
     if (action == 'shortcut') unawaited(_changeShortcut());
     if (action == 'startup') unawaited(_toggleStartup());
     if (action == 'keyboard') unawaited(_showKeyboardSetup());
+    if (action == 'updates') unawaited(_checkForUpdates());
     if (action == 'paste') {
       unawaited(
         AndroidBridge.importClipboardImage().catchError((Object e) {
           _showError('Could not import clipboard image: $e');
         }),
       );
+    }
+  }
+
+  Future<void> _checkForUpdates({bool automatic = false}) async {
+    try {
+      final release = await ReleaseUpdater.checkForUpdate();
+      if (!mounted) return;
+      if (release == null) {
+        if (!automatic) _showError('Memlib is up to date.');
+        return;
+      }
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text('Memlib ${release.versionLabel} is available'),
+          content: Text(
+            release.notes.trim().isEmpty
+                ? 'Install the latest version from GitHub Releases?'
+                : release.notes.trim(),
+            maxLines: 8,
+            overflow: TextOverflow.ellipsis,
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Later'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.pop(dialogContext);
+                unawaited(_downloadAndInstallUpdate(release));
+              },
+              child: const Text('Update'),
+            ),
+          ],
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      if (!automatic) _showError('Could not check for updates: $error');
+      debugPrint('Memlib update check failed: $error');
+    }
+  }
+
+  Future<void> _downloadAndInstallUpdate(GithubRelease release) async {
+    try {
+      final asset = Platform.isWindows
+          ? 'MemLib-Windows.zip'
+          : 'MemLib-Android.apk';
+      final file = await ReleaseUpdater.download(release, asset);
+      if (Platform.isWindows) {
+        await ReleaseUpdater.installWindows(file);
+        return;
+      }
+      final launched = await AndroidBridge.installApk(file);
+      if (!mounted) return;
+      if (!launched) {
+        _showError(
+          'Allow Memlib to install unknown apps in Android settings, then choose Check for updates again.',
+        );
+      }
+    } catch (error) {
+      if (mounted) _showError('Could not install the update: $error');
     }
   }
 
@@ -1835,6 +1905,10 @@ class _LibraryScreenState extends State<LibraryScreen>
       itemBuilder: (_) => [
         if (platform == TargetPlatform.windows) ...[
           const PopupMenuItem(
+            value: 'updates',
+            child: Text('Check for updates'),
+          ),
+          const PopupMenuItem(
             value: 'shortcut',
             child: Text('Change picker shortcut'),
           ),
@@ -1845,6 +1919,10 @@ class _LibraryScreenState extends State<LibraryScreen>
           ),
         ],
         if (platform == TargetPlatform.android) ...[
+          const PopupMenuItem(
+            value: 'updates',
+            child: Text('Check for updates'),
+          ),
           const PopupMenuItem(
             value: 'keyboard',
             child: Text('Set up keyboard'),
