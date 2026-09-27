@@ -14,6 +14,36 @@ import 'package:http/testing.dart';
 
 class _MemoryStore extends LibraryStore {
   @override
+  Future<void> addFolder(String name, {String? parentId}) async {
+    folders.add(
+      LibraryFolder(
+        id: 'folder-${folders.length}',
+        name: name,
+        parentId: parentId,
+      ),
+    );
+    notifyListeners();
+  }
+
+  @override
+  Future<void> renameFolder(LibraryFolder folder, String name) async {
+    folder.name = name.trim();
+    notifyListeners();
+  }
+
+  @override
+  Future<void> deleteFolder(LibraryFolder folder) async {
+    for (final child in folders.where((entry) => entry.parentId == folder.id)) {
+      child.parentId = folder.parentId;
+    }
+    for (final item in items.where((entry) => entry.folderId == folder.id)) {
+      item.folderId = folder.parentId;
+    }
+    folders.remove(folder);
+    notifyListeners();
+  }
+
+  @override
   Future<LibraryItem> importBytes(
     Uint8List bytes, {
     required String name,
@@ -202,6 +232,26 @@ void main() {
       expect(find.byKey(const ValueKey('folder-card-parent')), findsOneWidget);
       expect(find.text('Loose'), findsOneWidget);
       expect(find.text('Nested'), findsNothing);
+      await tester.tap(
+        find.descendant(
+          of: find.byKey(const ValueKey('item-card-loose')),
+          matching: find.byTooltip('Item options'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .getSize(
+              find.ancestor(
+                of: find.text('Rename'),
+                matching: find.byType(PopupMenuItem<String>),
+              ),
+            )
+            .width,
+        greaterThan(150),
+      );
+      await tester.tapAt(const Offset(5, 400));
+      await tester.pumpAndSettle();
       final gesture = await tester.startGesture(
         tester.getCenter(find.byKey(const ValueKey('item-card-loose'))),
       );
@@ -416,6 +466,7 @@ void main() {
     expect(find.text('2 items'), findsWidgets);
     await gesture.moveTo(target);
     await tester.pump();
+    expect(tester.takeException(), isNull);
     await gesture.up();
     await tester.pumpAndSettle();
     expect(store.items[0].folderId, 'destination');
@@ -427,9 +478,7 @@ void main() {
     final remaining = tester.getCenter(
       find.byKey(const ValueKey('item-card-item2')),
     );
-    final root = tester.getCenter(
-      find.widgetWithText(ListTile, 'Library root'),
-    );
+    final root = tester.getCenter(find.widgetWithText(ListTile, 'All items'));
     final rejected = await tester.startGesture(
       remaining,
       kind: PointerDeviceKind.mouse,
@@ -438,6 +487,7 @@ void main() {
     await tester.pump();
     await rejected.moveTo(root);
     await tester.pump();
+    expect(tester.takeException(), isNull);
     await rejected.up();
     await tester.pumpAndSettle();
     expect(store.items[2].folderId, isNull);
@@ -590,9 +640,7 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   }, skip: !Platform.isWindows);
 
-  testWidgets('mobile selected card drags the whole selection', (
-    tester,
-  ) async {
+  testWidgets('mobile selected card drags the whole selection', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
     tester.view.physicalSize = const Size(400, 800);
@@ -821,12 +869,108 @@ void main() {
     await tester.enterText(find.byType(TextField).last, 'wave');
     await tester.tap(find.text('Search'));
     await tester.pumpAndSettle();
-    expect(find.text('Result 23'), findsNothing);
+    final grid = tester.widget<GridView>(find.byType(GridView).last);
+    expect(grid.controller!.offset, 0);
     for (var i = 0; i < 10; i++) {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pumpAndSettle();
     }
     expect(find.text('Result 23'), findsOneWidget);
+    expect(grid.controller!.offset, greaterThan(0));
     expect(tester.takeException(), isNull);
   }, skip: !Platform.isWindows);
+
+  testWidgets('library navigation fits a 320px viewport', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MemlibApp(store: LibraryStore(), enableTray: false),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.text('GIPHY'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('Android layout exposes settings and folder management', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    tester.view.physicalSize = const Size(400, 760);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final store = _MemoryStore();
+    store.folders.addAll([
+      LibraryFolder(id: 'parent', name: 'Reactions'),
+      LibraryFolder(id: 'child', name: 'Animals', parentId: 'parent'),
+    ]);
+
+    await tester.pumpWidget(MemlibApp(store: store, enableTray: false));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    expect(find.text('Set up keyboard'), findsOneWidget);
+    expect(find.text('Import image from clipboard'), findsOneWidget);
+    await tester.tapAt(const Offset(5, 300));
+    await tester.pumpAndSettle();
+
+    final parentCard = find.byKey(const ValueKey('folder-card-parent'));
+    await tester.tap(
+      find.descendant(
+        of: parentCard,
+        matching: find.byTooltip('Folder options'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .getSize(
+            find.ancestor(
+              of: find.text('Rename folder'),
+              matching: find.byType(PopupMenuItem<String>),
+            ),
+          )
+          .width,
+      greaterThan(150),
+    );
+    await tester.tap(find.text('Rename folder'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).last, 'Memes');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(store.folders.first.name, 'Memes');
+
+    await tester.tap(parentCard);
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Up one folder'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('folder-card-child')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Up one folder'));
+    await tester.pumpAndSettle();
+    expect(find.text('Memes'), findsWidgets);
+    await tester.tap(find.byTooltip('Folder options').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Remove folder'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Items and subfolders will move to All items.'),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Remove folder'));
+    await tester.pumpAndSettle();
+    expect(store.folders.any((folder) => folder.id == 'parent'), isFalse);
+    expect(store.folders.single.parentId, isNull);
+    expect(find.byKey(const ValueKey('folder-card-child')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  });
 }
