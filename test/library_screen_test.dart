@@ -590,7 +590,7 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   }, skip: !Platform.isWindows);
 
-  testWidgets('mobile drag handle moves selected items and clears selection', (
+  testWidgets('mobile selected card drags the whole selection', (
     tester,
   ) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
@@ -623,17 +623,22 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('select-item0')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('select-item1')));
+    await tester.tap(find.byKey(const ValueKey('item-card-item1')));
     await tester.pumpAndSettle();
-    final handle = find.descendant(
-      of: find.byKey(const ValueKey('item-card-item0')),
-      matching: find.byTooltip('Drag selected items to a folder'),
+    expect(find.text('2 selected'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('item-card-item1')));
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('item-card-item1')));
+    await tester.pumpAndSettle();
+    final source = tester.getCenter(
+      find.byKey(const ValueKey('item-card-item0')),
     );
-    final source = tester.getCenter(handle);
     final target = tester.getCenter(
       find.byKey(const ValueKey('folder-card-destination')),
     );
     final gesture = await tester.startGesture(source);
+    await tester.pump(const Duration(milliseconds: 600));
     await gesture.moveBy(const Offset(-30, 0));
     await tester.pump();
     await gesture.moveTo(target);

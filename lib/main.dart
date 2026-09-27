@@ -1074,7 +1074,18 @@ class _LibraryScreenState extends State<LibraryScreen>
   Widget _drag(_LibraryDrag data, String label, IconData icon, Widget child) {
     final feedback = _dragFeedback(label, icon);
     if (Theme.of(context).platform == TargetPlatform.android) {
-      if (!data.folder) return child;
+      if (!data.folder) {
+        if (mobileSelecting || data.itemIds.isEmpty ||
+            !selectedItemIds.contains(data.itemIds.first)) {
+          return child;
+        }
+        return LongPressDraggable<_LibraryDrag>(
+          data: data,
+          feedback: feedback,
+          childWhenDragging: Opacity(opacity: .4, child: child),
+          child: child,
+        );
+      }
       return LongPressDraggable<_LibraryDrag>(
         data: data,
         feedback: feedback,
@@ -2535,6 +2546,9 @@ class _LibraryScreenState extends State<LibraryScreen>
         onTap: () {
           if (picker) {
             _useItem(item);
+          } else if (selectedItemIds.isNotEmpty &&
+              Theme.of(context).platform == TargetPlatform.android) {
+            _selectLibraryItem(item, checkbox: true);
           } else if (selectedItemIds.isNotEmpty ||
               (Platform.isWindows &&
                   (HardwareKeyboard.instance.isShiftPressed ||
@@ -2606,20 +2620,8 @@ class _LibraryScreenState extends State<LibraryScreen>
                     Positioned(
                       left: 4,
                       bottom: 4,
-                      child: Tooltip(
-                        message: 'Drag selected items to a folder',
-                        child: Draggable<_LibraryDrag>(
-                          data: _dragDataForItem(item),
-                          feedback: _dragFeedback(
-                            '${selectedItemIds.length} ${selectedItemIds.length == 1 ? 'item' : 'items'}',
-                            Icons.drive_file_move_outline,
-                          ),
-                          childWhenDragging: const Icon(
-                            Icons.drag_indicator,
-                            size: 24,
-                          ),
-                          child: const Icon(Icons.drag_indicator, size: 24),
-                        ),
+                      child: const IgnorePointer(
+                        child: Icon(Icons.drag_indicator, size: 24),
                       ),
                     ),
                   Positioned(
@@ -2747,7 +2749,9 @@ class _LibraryScreenState extends State<LibraryScreen>
         ),
       ),
     );
-    if (!picker && Theme.of(context).platform == TargetPlatform.android) {
+    if (!picker &&
+        Theme.of(context).platform == TargetPlatform.android &&
+        (!selectedItemIds.contains(item.id) || mobileSelecting)) {
       return GestureDetector(
         onLongPressStart: (_) => setState(() {
           mobileSelecting = true;
@@ -2756,8 +2760,8 @@ class _LibraryScreenState extends State<LibraryScreen>
         }),
         onLongPressMoveUpdate: (details) =>
             _selectItemAt(details.globalPosition),
-        onLongPressEnd: (_) => mobileSelecting = false,
-        onLongPressCancel: () => mobileSelecting = false,
+        onLongPressEnd: (_) => setState(() => mobileSelecting = false),
+        onLongPressCancel: () => setState(() => mobileSelecting = false),
         child: card,
       );
     }
