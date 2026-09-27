@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_selector/file_selector.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
@@ -277,7 +278,7 @@ class _LibraryScreenState extends State<LibraryScreen>
         if (mounted) unawaited(_drainAndroidPending());
       });
     }
-    if (Platform.isWindows || Platform.isAndroid) {
+    if (kReleaseMode && (Platform.isWindows || Platform.isAndroid)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) unawaited(_checkForUpdates(automatic: true));
       });
@@ -636,7 +637,7 @@ class _LibraryScreenState extends State<LibraryScreen>
         (giphyTab ? 4.0 : 0.0) + (index ~/ columns) * (tileHeight + spacing);
     final bottom = top + tileHeight;
     final position = controller.position;
-    const margin = 8.0;
+    const margin = 0.0;
     double? destination;
     if (top < position.pixels + margin) {
       destination = top - margin;
