@@ -130,9 +130,9 @@ class MemlibKeyboardService : InputMethodService() {
         try {
             val index = File(libraryRoot, "index.json")
             val data = JSONObject(index.readText())
-            folders = data.optJSONArray("folders").asObjects().map { Folder(it.getString("id"), it.optString("name"), it.optString("parentId").takeUnless(String::isEmpty)) }
+            folders = data.optJSONArray("folders").asObjects().map { Folder(it.getString("id"), it.optString("name"), it.optNullableString("parentId")) }
             items = data.optJSONArray("items").asObjects().map {
-                Item(it.getString("id"), it.optString("name"), it.getString("filename"), it.optString("folderId").takeUnless(String::isEmpty), it.optBoolean("favorite"), it.optInt("useCount"), it.optString("sourceType"), it.optString("sourceId"), it.optString("sourcePage").takeUnless(String::isEmpty), it.optJSONArray("tags").asStrings())
+                Item(it.getString("id"), it.optString("name"), it.getString("filename"), it.optNullableString("folderId"), it.optBoolean("favorite"), it.optInt("useCount"), it.optString("sourceType"), it.optString("sourceId"), it.optNullableString("sourcePage"), it.optJSONArray("tags").asStrings())
             }
             if (folderId != null && folders.none { it.id == folderId }) folderId = null
             val available = items.flatMap { it.tags }.map(String::lowercase).toSet()
@@ -148,6 +148,9 @@ class MemlibKeyboardService : InputMethodService() {
 
     private fun JSONArray?.asStrings(): List<String> =
         if (this == null) emptyList() else (0 until length()).mapNotNull { optString(it).takeIf(String::isNotBlank) }
+
+    private fun JSONObject.optNullableString(name: String): String? =
+        (opt(name) as? String)?.takeIf(String::isNotEmpty)
 
     private fun render() {
         if (!::rootView.isInitialized) return
@@ -256,8 +259,8 @@ class MemlibKeyboardService : InputMethodService() {
             visibility = View.GONE
         }
         val widthDp = resources.displayMetrics.widthPixels / resources.displayMetrics.density
-        val columns = if (widthDp >= 390) 4 else 3
-        val tileHeight = if (searchMode) dp(84) else minOf(dp(104), (resources.displayMetrics.widthPixels - dp(28)) / columns)
+        val columns = if (widthDp >= 520) 4 else 3
+        val tileHeight = minOf(dp(128), (resources.displayMetrics.widthPixels - dp(28)) / columns)
         if (tagFilterMode) {
             renderTagFilters(grid)
         } else if (giphyMode && giphyResults.isNotEmpty()) {
