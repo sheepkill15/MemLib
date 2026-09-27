@@ -97,25 +97,74 @@ class MemlibApp extends StatelessWidget {
     debugShowCheckedModeBanner: false,
     theme: ThemeData(
       useMaterial3: true,
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: const Color(0xFF7C5CDE),
-        brightness: Brightness.dark,
+      colorScheme: const ColorScheme.dark(
+        primary: Color(0xFFBDA7FF),
+        onPrimary: Color(0xFF1A1623),
+        secondary: Color(0xFFC9B8FF),
+        surface: Color(0xFF1B1724),
+        onSurface: Color(0xFFFFFFFF),
+        error: Color(0xFFFF9B8F),
       ),
       scaffoldBackgroundColor: const Color(0xFF121019),
+      dividerColor: const Color(0xFF514462),
+      visualDensity: VisualDensity.compact,
       appBarTheme: const AppBarTheme(
         backgroundColor: Color(0xFF1B1724),
-        foregroundColor: Colors.white,
+        foregroundColor: Color(0xFFFFFFFF),
         elevation: 0,
       ),
       cardTheme: CardThemeData(
-        color: const Color(0xFF24202E),
+        color: const Color(0xFF1B1724),
         elevation: 0,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: const BorderSide(color: Color(0xFF514462)),
+        ),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: const Color(0xFF211C2B),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+        fillColor: const Color(0xFF24202E),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: 10,
+        ),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(9),
+          borderSide: const BorderSide(color: Color(0xFF514462)),
+        ),
+      ),
+      chipTheme: ChipThemeData(
+        backgroundColor: const Color(0xFF24202E),
+        selectedColor: const Color(0xFFBDA7FF),
+        side: const BorderSide(color: Color(0xFF514462)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+      listTileTheme: ListTileThemeData(
+        dense: true,
+        visualDensity: VisualDensity.compact,
+        selectedColor: const Color(0xFFBDA7FF),
+        selectedTileColor: const Color(0xFF382B56),
+        iconColor: const Color(0xFFB8B2C4),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+      ),
+      checkboxTheme: CheckboxThemeData(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+        side: const BorderSide(color: Color(0xFFBDA7FF), width: 1.5),
+        fillColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected)
+              ? const Color(0xFFBDA7FF)
+              : const Color(0xDD1B1724),
+        ),
+        checkColor: const WidgetStatePropertyAll(Color(0xFF1A1623)),
+      ),
+      popupMenuTheme: PopupMenuThemeData(
+        color: const Color(0xFF24202E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: const Color(0xFF1B1724),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       ),
     ),
     home: LibraryScreen(
@@ -486,16 +535,18 @@ class _LibraryScreenState extends State<LibraryScreen>
   }
 
   int get _giphyPickerColumns =>
-      ((giphyPickerGridWidth - 28) / (145 + 10)).ceil().clamp(1, 100);
+      ((giphyPickerGridWidth - 28) / (145 + 8)).ceil().clamp(1, 100);
 
   void _scrollPickerSelectionIntoView(int index) {
     final controller = giphyTab ? giphyPickerScroll : pickerScroll;
     if (!controller.hasClients) return;
     final columns = giphyTab ? _giphyPickerColumns : 4;
     final width = giphyTab ? giphyPickerGridWidth : pickerGridWidth;
-    final tileWidth = (width - 28 - (columns - 1) * 10) / columns;
-    final tileHeight = giphyTab ? tileWidth / 0.94 : tileWidth;
-    final top = (giphyTab ? 4.0 : 0.0) + (index ~/ columns) * (tileHeight + 10);
+    final spacing = giphyTab ? 8.0 : 7.0;
+    final tileWidth = (width - 28 - (columns - 1) * spacing) / columns;
+    final tileHeight = giphyTab ? tileWidth / 1.02 : tileWidth;
+    final top =
+        (giphyTab ? 4.0 : 0.0) + (index ~/ columns) * (tileHeight + spacing);
     final bottom = top + tileHeight;
     final position = controller.position;
     const margin = 8.0;
@@ -1044,7 +1095,7 @@ class _LibraryScreenState extends State<LibraryScreen>
             ? null
             : Border.all(color: const Color(0xFFBDA7FF)),
       ),
-      child: child,
+      child: Material(type: MaterialType.transparency, child: child),
     ),
   );
 
@@ -1074,7 +1125,19 @@ class _LibraryScreenState extends State<LibraryScreen>
   Widget _drag(_LibraryDrag data, String label, IconData icon, Widget child) {
     final feedback = _dragFeedback(label, icon);
     if (Theme.of(context).platform == TargetPlatform.android) {
-      if (!data.folder) return child;
+      if (!data.folder) {
+        if (mobileSelecting ||
+            data.itemIds.isEmpty ||
+            !selectedItemIds.contains(data.itemIds.first)) {
+          return child;
+        }
+        return LongPressDraggable<_LibraryDrag>(
+          data: data,
+          feedback: feedback,
+          childWhenDragging: Opacity(opacity: .4, child: child),
+          child: child,
+        );
+      }
       return LongPressDraggable<_LibraryDrag>(
         data: data,
         feedback: feedback,
@@ -1353,10 +1416,10 @@ class _LibraryScreenState extends State<LibraryScreen>
       );
     }
     final width = box.size.width - 32;
-    final columns = (width / (190 + 12)).ceil().clamp(1, 100);
-    final tileWidth = (width - (columns - 1) * 12) / columns;
-    final strideY = tileWidth / 0.85 + 12;
-    final column = ((local.dx - 16) / (tileWidth + 12)).floor();
+    final columns = (width / (154 + 8)).ceil().clamp(1, 100);
+    final tileWidth = (width - (columns - 1) * 8) / columns;
+    final strideY = tileWidth / 1.02 + 8;
+    final column = ((local.dx - 16) / (tileWidth + 8)).floor();
     final row = ((local.dy + position.pixels) / strideY).floor();
     if (column < 0 || column >= columns || row < 0) return;
     final index = row * columns + column - visibleFolders.length;
@@ -1421,7 +1484,7 @@ class _LibraryScreenState extends State<LibraryScreen>
     final tags = items.expand((item) => item.tags).toSet().toList()..sort();
     return Material(
       elevation: 12,
-      color: const Color(0xFF2D2540),
+      color: const Color(0xFF24202E),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
         side: const BorderSide(color: Color(0xFF665286)),
@@ -1529,6 +1592,45 @@ class _LibraryScreenState extends State<LibraryScreen>
 
   void _switchMainTab(int tab) => _switchTab(tab == 1);
 
+  Widget _mainNavigation() => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      _navButton(
+        'Library',
+        Icons.grid_view_rounded,
+        !giphyTab,
+        () => _switchMainTab(0),
+      ),
+      const SizedBox(width: 4),
+      _navButton(
+        'GIPHY',
+        Icons.auto_awesome_outlined,
+        giphyTab,
+        () => _switchMainTab(1),
+      ),
+    ],
+  );
+
+  Widget _navButton(
+    String label,
+    IconData icon,
+    bool active,
+    VoidCallback onTap,
+  ) => TextButton.icon(
+    onPressed: onTap,
+    icon: Icon(icon, size: 17),
+    label: Text(label),
+    style: TextButton.styleFrom(
+      foregroundColor: active
+          ? const Color(0xFFBDA7FF)
+          : const Color(0xFFB8B2C4),
+      backgroundColor: active ? const Color(0xFF382B56) : Colors.transparent,
+      minimumSize: const Size(0, 36),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+    ),
+  );
+
   Future<void> _importClipboardFiles() async {
     try {
       final paths = await Pasteboard.files();
@@ -1581,6 +1683,51 @@ class _LibraryScreenState extends State<LibraryScreen>
     } catch (e) {
       if (mounted) _showError('Account action failed: $e');
     }
+  }
+
+  void _settingsAction(String action) {
+    if (action == 'shortcut') unawaited(_changeShortcut());
+    if (action == 'startup') unawaited(_toggleStartup());
+    if (action == 'keyboard') unawaited(_showKeyboardSetup());
+    if (action == 'paste') {
+      unawaited(
+        AndroidBridge.importClipboardImage().catchError((Object e) {
+          _showError('Could not import clipboard image: $e');
+        }),
+      );
+    }
+  }
+
+  Widget _settingsButton() {
+    final platform = Theme.of(context).platform;
+    return PopupMenuButton<String>(
+      tooltip: 'Settings',
+      icon: const Icon(Icons.settings_outlined),
+      onSelected: _settingsAction,
+      itemBuilder: (_) => [
+        if (platform == TargetPlatform.windows) ...[
+          const PopupMenuItem(
+            value: 'shortcut',
+            child: Text('Change picker shortcut'),
+          ),
+          CheckedPopupMenuItem(
+            value: 'startup',
+            checked: startupEnabled,
+            child: const Text('Launch at sign-in'),
+          ),
+        ],
+        if (platform == TargetPlatform.android) ...[
+          const PopupMenuItem(
+            value: 'keyboard',
+            child: Text('Set up keyboard'),
+          ),
+          const PopupMenuItem(
+            value: 'paste',
+            child: Text('Import image from clipboard'),
+          ),
+        ],
+      ],
+    );
   }
 
   Widget _accountButton() {
@@ -1641,11 +1788,12 @@ class _LibraryScreenState extends State<LibraryScreen>
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width > 720 && !picker;
+    final inlineNavigation = MediaQuery.sizeOf(context).width >= 600;
     final content = picker
         ? _pickerView()
         : Row(
             children: [
-              if (wide) SizedBox(width: 250, child: _sidebar()),
+              if (wide) SizedBox(width: 208, child: _sidebar()),
               Expanded(
                 child: Column(
                   children: [
@@ -1680,25 +1828,17 @@ class _LibraryScreenState extends State<LibraryScreen>
                             ),
                         ],
                       ),
-                    if (!picker)
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-                        child: SegmentedButton<int>(
-                          segments: const [
-                            ButtonSegment(
-                              value: 0,
-                              label: Text('Library'),
-                              icon: Icon(Icons.collections_outlined),
-                            ),
-                            ButtonSegment(
-                              value: 1,
-                              label: Text('GIPHY'),
-                              icon: Icon(Icons.search),
-                            ),
-                          ],
-                          selected: {giphyTab ? 1 : 0},
-                          onSelectionChanged: (v) => _switchMainTab(v.first),
+                    if (!inlineNavigation)
+                      Container(
+                        alignment: Alignment.centerLeft,
+                        padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+                        decoration: const BoxDecoration(
+                          color: Color(0xFF1B1724),
+                          border: Border(
+                            bottom: BorderSide(color: Color(0xFF514462)),
+                          ),
                         ),
+                        child: _mainNavigation(),
                       ),
                     if (giphyTab && !picker)
                       Expanded(child: _giphyView())
@@ -1713,15 +1853,27 @@ class _LibraryScreenState extends State<LibraryScreen>
       appBar: picker
           ? null
           : AppBar(
-              title: const Row(
+              title: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(
+                  const Icon(
                     Icons.auto_awesome_mosaic_rounded,
                     color: Color(0xFFBDA7FF),
+                    size: 22,
                   ),
-                  SizedBox(width: 10),
-                  Text('Memlib', style: TextStyle(fontWeight: FontWeight.w700)),
+                  const SizedBox(width: 9),
+                  const Text(
+                    'Memlib',
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -.3,
+                    ),
+                  ),
+                  if (inlineNavigation) ...[
+                    const SizedBox(width: 20),
+                    _mainNavigation(),
+                  ],
                 ],
               ),
               actions: [
@@ -1734,54 +1886,8 @@ class _LibraryScreenState extends State<LibraryScreen>
                     icon: Icon(picker ? Icons.open_in_full : Icons.bolt),
                     onPressed: () => _togglePicker(),
                   ),
-                if (Platform.isAndroid)
-                  PopupMenuButton<String>(
-                    tooltip: 'Android tools',
-                    icon: const Icon(Icons.keyboard_alt_outlined),
-                    onSelected: (value) {
-                      if (value == 'keyboard') unawaited(_showKeyboardSetup());
-                      if (value == 'paste') {
-                        unawaited(
-                          AndroidBridge.importClipboardImage().catchError((
-                            Object e,
-                          ) {
-                            _showError('Could not import clipboard image: $e');
-                          }),
-                        );
-                      }
-                    },
-                    itemBuilder: (_) => const [
-                      PopupMenuItem(
-                        value: 'keyboard',
-                        child: Text('Set up keyboard'),
-                      ),
-                      PopupMenuItem(
-                        value: 'paste',
-                        child: Text('Import image from clipboard'),
-                      ),
-                    ],
-                  ),
-                if (Platform.isWindows && !picker)
-                  PopupMenuButton<String>(
-                    tooltip: 'Settings',
-                    icon: const Icon(Icons.settings_outlined),
-                    onSelected: (value) {
-                      if (value == 'shortcut') unawaited(_changeShortcut());
-                      if (value == 'startup') unawaited(_toggleStartup());
-                    },
-                    itemBuilder: (_) => [
-                      const PopupMenuItem(
-                        value: 'shortcut',
-                        child: Text('Change picker shortcut'),
-                      ),
-                      CheckedPopupMenuItem(
-                        value: 'startup',
-                        checked: startupEnabled,
-                        child: const Text('Launch at sign-in'),
-                      ),
-                    ],
-                  ),
-                if (!picker)
+                if (!picker) _settingsButton(),
+                if (!picker && !wide)
                   IconButton(
                     tooltip: 'Import files',
                     icon: const Icon(Icons.add_photo_alternate_outlined),
@@ -1848,16 +1954,20 @@ class _LibraryScreenState extends State<LibraryScreen>
     final items = visibleItems;
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: const Color(0xFF1A1623),
+        color: const Color(0xFF121019),
         border: Border.all(color: const Color(0xFF514462)),
       ),
       child: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 8, 2),
+            padding: const EdgeInsets.fromLTRB(14, 4, 8, 4),
             child: Row(
               children: [
-                const Icon(Icons.bolt, color: Color(0xFFBDA7FF), size: 20),
+                const Icon(
+                  Icons.auto_awesome_mosaic_rounded,
+                  color: Color(0xFFBDA7FF),
+                  size: 18,
+                ),
                 const SizedBox(width: 8),
                 const Expanded(
                   child: Text(
@@ -1865,6 +1975,18 @@ class _LibraryScreenState extends State<LibraryScreen>
                     style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
                   ),
                 ),
+                ChoiceChip(
+                  label: const Text('Your library'),
+                  selected: !giphyTab,
+                  onSelected: (_) => _switchTab(false),
+                ),
+                const SizedBox(width: 6),
+                ChoiceChip(
+                  label: const Text('GIPHY'),
+                  selected: giphyTab,
+                  onSelected: (_) => _switchTab(true),
+                ),
+                const SizedBox(width: 8),
                 IconButton(
                   tooltip: 'Open library',
                   icon: const Icon(Icons.open_in_full, size: 18),
@@ -1878,31 +2000,11 @@ class _LibraryScreenState extends State<LibraryScreen>
               ],
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 4, 14, 10),
-            child: Row(
-              children: [
-                ChoiceChip(
-                  label: const Text('Your library'),
-                  avatar: const Icon(Icons.collections_outlined, size: 16),
-                  selected: !giphyTab,
-                  onSelected: (_) => _switchTab(false),
-                ),
-                const SizedBox(width: 8),
-                ChoiceChip(
-                  label: const Text('GIPHY'),
-                  avatar: const Icon(Icons.search, size: 16),
-                  selected: giphyTab,
-                  onSelected: (_) => _switchTab(true),
-                ),
-              ],
-            ),
-          ),
           if (giphyTab)
             Expanded(child: _giphyView(compact: true))
           else ...[
             Padding(
-              padding: const EdgeInsets.fromLTRB(14, 2, 14, 10),
+              padding: const EdgeInsets.fromLTRB(14, 2, 14, 6),
               child: Row(
                 children: [
                   Expanded(
@@ -1915,11 +2017,6 @@ class _LibraryScreenState extends State<LibraryScreen>
                         hintText: 'Search items and tags',
                         isDense: true,
                         filled: true,
-                        fillColor: const Color(0xFF2A2435),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide.none,
-                        ),
                       ),
                     ),
                   ),
@@ -1929,7 +2026,7 @@ class _LibraryScreenState extends State<LibraryScreen>
               ),
             ),
             SizedBox(
-              height: 42,
+              height: 38,
               child: ListView(
                 scrollDirection: Axis.horizontal,
                 padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -1970,7 +2067,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                 ],
               ),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 4),
             Expanded(
               child: items.isEmpty
                   ? const Center(
@@ -1989,8 +2086,8 @@ class _LibraryScreenState extends State<LibraryScreen>
                               const SliverGridDelegateWithFixedCrossAxisCount(
                                 crossAxisCount: 4,
                                 childAspectRatio: 1.0,
-                                crossAxisSpacing: 10,
-                                mainAxisSpacing: 10,
+                                crossAxisSpacing: 7,
+                                mainAxisSpacing: 7,
                               ),
                           itemCount: items.length,
                           itemBuilder: (context, index) => _itemCard(
@@ -2004,7 +2101,7 @@ class _LibraryScreenState extends State<LibraryScreen>
           ],
           const Divider(height: 1),
           Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
+            padding: const EdgeInsets.symmetric(vertical: 5),
             child: Text(
               giphyTab
                   ? 'Search GIPHY   ·   Arrow keys to move   ·   Enter to paste   ·   Esc to close'
@@ -2016,6 +2113,60 @@ class _LibraryScreenState extends State<LibraryScreen>
       ),
     );
   }
+
+  Future<void> _folderAction(LibraryFolder folder, String action) async {
+    if (action == 'new') {
+      final name = await _askName('New subfolder');
+      if (name == null) return;
+      await widget.store.addFolder(name, parentId: folder.id);
+      if (mounted) setState(() => expandedFolders.add(folder.id));
+    } else if (action == 'rename') {
+      final name = await _askName('Rename folder', initial: folder.name);
+      if (name != null) await widget.store.renameFolder(folder, name);
+    } else if (action == 'delete') {
+      final parent = widget.store.folders
+          .where((entry) => entry.id == folder.parentId)
+          .firstOrNull;
+      final destination = parent?.name ?? 'All items';
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('Remove ${folder.name}?'),
+          content: Text('Items and subfolders will move to $destination.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Remove folder'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+      if (selectedFolder == folder.id) _openFolder(folder.parentId);
+      await widget.store.deleteFolder(folder);
+      if (mounted) setState(() => expandedFolders.remove(folder.id));
+    }
+  }
+
+  Widget _folderMenu(LibraryFolder folder) => SizedBox(
+    width: 32,
+    height: 32,
+    child: PopupMenuButton<String>(
+      tooltip: 'Folder options',
+      icon: const Icon(Icons.more_horiz, size: 19),
+      padding: EdgeInsets.zero,
+      onSelected: (action) => unawaited(_folderAction(folder, action)),
+      itemBuilder: (_) => const [
+        PopupMenuItem(value: 'new', child: Text('New subfolder')),
+        PopupMenuItem(value: 'rename', child: Text('Rename folder')),
+        PopupMenuItem(value: 'delete', child: Text('Remove folder')),
+      ],
+    ),
+  );
 
   Widget _folderTile(LibraryFolder folder, {int depth = 0}) {
     final children = foldersIn(folder.id);
@@ -2059,35 +2210,7 @@ class _LibraryScreenState extends State<LibraryScreen>
           ),
           selected: selectedFolder == folder.id && !favoritesOnly,
           onTap: () => _openFolder(folder.id),
-          trailing: PopupMenuButton<String>(
-            tooltip: 'Folder options',
-            onSelected: (action) async {
-              if (action == 'new') {
-                final name = await _askName('New subfolder');
-                if (name != null) {
-                  await widget.store.addFolder(name, parentId: folder.id);
-                  setState(() => expandedFolders.add(folder.id));
-                }
-              } else if (action == 'rename') {
-                final name = await _askName(
-                  'Rename folder',
-                  initial: folder.name,
-                );
-                if (name != null) await widget.store.renameFolder(folder, name);
-              } else if (action == 'delete') {
-                if (selectedFolder == folder.id) _openFolder(folder.parentId);
-                await widget.store.deleteFolder(folder);
-              }
-            },
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'new', child: Text('New subfolder')),
-              PopupMenuItem(value: 'rename', child: Text('Rename')),
-              PopupMenuItem(
-                value: 'delete',
-                child: Text('Remove folder; keep contents'),
-              ),
-            ],
-          ),
+          trailing: _folderMenu(folder),
         ),
       ),
     );
@@ -2101,20 +2224,21 @@ class _LibraryScreenState extends State<LibraryScreen>
   }
 
   Widget _sidebar() => Material(
-    color: const Color(0xFF1C1924),
+    color: const Color(0xFF1B1724),
     child: Column(
       children: [
+        const SizedBox(height: 8),
         _dropOn(
           null,
           ListTile(
-            leading: const Icon(Icons.home_outlined),
-            title: const Text('Library root'),
+            leading: const Icon(Icons.grid_view_rounded, size: 19),
+            title: const Text('All items'),
             selected: selectedFolder == null && !favoritesOnly,
             onTap: () => _openFolder(null),
           ),
         ),
         ListTile(
-          leading: const Icon(Icons.star_outline),
+          leading: const Icon(Icons.star_outline, size: 19),
           title: const Text('Favourites'),
           selected: favoritesOnly,
           onTap: () => setState(() {
@@ -2124,12 +2248,22 @@ class _LibraryScreenState extends State<LibraryScreen>
             selectionAnchorId = null;
           }),
         ),
-        const Divider(),
+        const Divider(height: 16, indent: 12, endIndent: 12),
         Padding(
           padding: const EdgeInsets.only(left: 16, right: 4),
           child: Row(
             children: [
-              const Expanded(child: Text('FOLDERS')),
+              const Expanded(
+                child: Text(
+                  'FOLDERS',
+                  style: TextStyle(
+                    fontSize: 10,
+                    letterSpacing: 1.2,
+                    color: Color(0xFFB8B2C4),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
               IconButton(
                 tooltip: 'New folder',
                 icon: const Icon(Icons.add),
@@ -2162,43 +2296,16 @@ class _LibraryScreenState extends State<LibraryScreen>
 
   Widget _libraryView(bool wide) => Column(
     children: [
-      if (selectedFolder != null &&
-          !favoritesOnly &&
-          searchController.text.trim().isEmpty &&
-          selectedTagFilters.isEmpty)
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                _dropOn(
-                  null,
-                  TextButton.icon(
-                    onPressed: () => _openFolder(null),
-                    icon: const Icon(Icons.home_outlined, size: 18),
-                    label: const Text('Library'),
-                  ),
-                ),
-                for (final folder in _folderPath()) ...[
-                  const Icon(
-                    Icons.chevron_right,
-                    size: 18,
-                    color: Colors.white54,
-                  ),
-                  TextButton(
-                    onPressed: () => _openFolder(folder.id),
-                    child: Text(folder.name),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
       Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
         child: Row(
           children: [
+            if (!wide && selectedFolder != null && !favoritesOnly)
+              IconButton(
+                tooltip: 'Up one folder',
+                icon: const Icon(Icons.arrow_back, size: 19),
+                onPressed: () => _openFolder(currentFolder?.parentId),
+              ),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -2211,14 +2318,18 @@ class _LibraryScreenState extends State<LibraryScreen>
                         ? 'Favourites'
                         : currentFolder?.name ?? 'Your library',
                     style: const TextStyle(
-                      fontSize: 24,
+                      fontSize: 20,
                       fontWeight: FontWeight.w700,
+                      letterSpacing: -.35,
                     ),
                   ),
-                  const SizedBox(height: 3),
+                  const SizedBox(height: 1),
                   Text(
                     '${visibleFolders.length} ${visibleFolders.length == 1 ? 'folder' : 'folders'} · ${visibleItems.length} ${visibleItems.length == 1 ? 'item' : 'items'}',
-                    style: const TextStyle(color: Colors.white60, fontSize: 12),
+                    style: const TextStyle(
+                      color: Color(0xFFB8B2C4),
+                      fontSize: 11,
+                    ),
                   ),
                 ],
               ),
@@ -2241,6 +2352,8 @@ class _LibraryScreenState extends State<LibraryScreen>
                 },
                 icon: const Icon(Icons.create_new_folder_outlined),
               ),
+            if (currentFolder != null && !favoritesOnly)
+              _folderMenu(currentFolder!),
             if (wide)
               FilledButton.icon(
                 onPressed: _import,
@@ -2252,7 +2365,7 @@ class _LibraryScreenState extends State<LibraryScreen>
       ),
       if (!wide)
         SizedBox(
-          height: 52,
+          height: 44,
           child: ListView(
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -2260,7 +2373,7 @@ class _LibraryScreenState extends State<LibraryScreen>
               _dropOn(
                 null,
                 ChoiceChip(
-                  label: const Text('Library root'),
+                  label: const Text('All items'),
                   selected: selectedFolder == null && !favoritesOnly,
                   onSelected: (_) => _openFolder(null),
                 ),
@@ -2293,7 +2406,7 @@ class _LibraryScreenState extends State<LibraryScreen>
           ),
         ),
       Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
         child: Row(
           children: [
             Expanded(
@@ -2307,9 +2420,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                 decoration: InputDecoration(
                   prefixIcon: const Icon(Icons.search),
                   hintText: 'Search names and tags',
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
+                  isDense: true,
                 ),
               ),
             ),
@@ -2334,7 +2445,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                                 width: 92,
                                 height: 92,
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFF2D2540),
+                                  color: const Color(0xFF24202E),
                                   borderRadius: BorderRadius.circular(26),
                                 ),
                                 child: const Icon(
@@ -2394,13 +2505,13 @@ class _LibraryScreenState extends State<LibraryScreen>
                         16,
                         0,
                         16,
-                        selectedItemIds.isEmpty ? 20 : 88,
+                        selectedItemIds.isEmpty ? 16 : 80,
                       ),
                       gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-                        maxCrossAxisExtent: picker ? 140 : 190,
-                        childAspectRatio: 0.85,
-                        crossAxisSpacing: 12,
-                        mainAxisSpacing: 12,
+                        maxCrossAxisExtent: 154,
+                        childAspectRatio: 1.02,
+                        crossAxisSpacing: 8,
+                        mainAxisSpacing: 8,
                       ),
                       itemCount: visibleFolders.length + visibleItems.length,
                       itemBuilder: (context, index) {
@@ -2448,19 +2559,6 @@ class _LibraryScreenState extends State<LibraryScreen>
     ],
   );
 
-  List<LibraryFolder> _folderPath() {
-    final path = <LibraryFolder>[];
-    final seen = <String>{};
-    var folder = currentFolder;
-    while (folder != null && seen.add(folder.id)) {
-      path.insert(0, folder);
-      folder = widget.store.folders
-          .where((e) => e.id == folder!.parentId)
-          .firstOrNull;
-    }
-    return path;
-  }
-
   Widget _folderCard(LibraryFolder folder) {
     final subfolders = foldersIn(folder.id).length;
     final items = widget.store.items
@@ -2475,17 +2573,30 @@ class _LibraryScreenState extends State<LibraryScreen>
         child: InkWell(
           onTap: () => _openFolder(folder.id),
           child: Padding(
-            padding: const EdgeInsets.all(14),
+            padding: const EdgeInsets.all(10),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
-                  child: Center(
-                    child: Icon(
-                      Icons.folder_rounded,
-                      size: 72,
-                      color: const Color(0xFFBDA7FF).withValues(alpha: .9),
-                    ),
+                  child: Stack(
+                    children: [
+                      Center(
+                        child: Container(
+                          width: 52,
+                          height: 52,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF382B56),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Icon(
+                            Icons.folder_outlined,
+                            size: 28,
+                            color: Color(0xFFBDA7FF),
+                          ),
+                        ),
+                      ),
+                      Positioned(top: 0, right: 0, child: _folderMenu(folder)),
+                    ],
                   ),
                 ),
                 Text(
@@ -2494,10 +2605,13 @@ class _LibraryScreenState extends State<LibraryScreen>
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
-                const SizedBox(height: 3),
+                const SizedBox(height: 1),
                 Text(
                   '$subfolders folders · $items items',
-                  style: const TextStyle(fontSize: 11, color: Colors.white54),
+                  style: const TextStyle(
+                    fontSize: 10,
+                    color: Color(0xFFB8B2C4),
+                  ),
                 ),
               ],
             ),
@@ -2521,20 +2635,23 @@ class _LibraryScreenState extends State<LibraryScreen>
       clipBehavior: Clip.antiAlias,
       margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         side: BorderSide(
           color: selected || (!picker && selectedItemIds.contains(item.id))
               ? const Color(0xFFBDA7FF)
-              : Colors.transparent,
+              : const Color(0xFF514462),
           width: selected || (!picker && selectedItemIds.contains(item.id))
               ? 2
-              : 0,
+              : 1,
         ),
       ),
       child: InkWell(
         onTap: () {
           if (picker) {
             _useItem(item);
+          } else if (selectedItemIds.isNotEmpty &&
+              Theme.of(context).platform == TargetPlatform.android) {
+            _selectLibraryItem(item, checkbox: true);
           } else if (selectedItemIds.isNotEmpty ||
               (Platform.isWindows &&
                   (HardwareKeyboard.instance.isShiftPressed ||
@@ -2552,7 +2669,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                 fit: StackFit.expand,
                 children: [
                   Padding(
-                    padding: const EdgeInsets.all(8),
+                    padding: const EdgeInsets.all(5),
                     child: Image.file(
                       widget.store.fileFor(item),
                       fit: BoxFit.contain,
@@ -2606,20 +2723,8 @@ class _LibraryScreenState extends State<LibraryScreen>
                     Positioned(
                       left: 4,
                       bottom: 4,
-                      child: Tooltip(
-                        message: 'Drag selected items to a folder',
-                        child: Draggable<_LibraryDrag>(
-                          data: _dragDataForItem(item),
-                          feedback: _dragFeedback(
-                            '${selectedItemIds.length} ${selectedItemIds.length == 1 ? 'item' : 'items'}',
-                            Icons.drive_file_move_outline,
-                          ),
-                          childWhenDragging: const Icon(
-                            Icons.drag_indicator,
-                            size: 24,
-                          ),
-                          child: const Icon(Icons.drag_indicator, size: 24),
-                        ),
+                      child: const IgnorePointer(
+                        child: Icon(Icons.drag_indicator, size: 24),
                       ),
                     ),
                   Positioned(
@@ -2629,7 +2734,16 @@ class _LibraryScreenState extends State<LibraryScreen>
                       tooltip: item.favorite
                           ? 'Remove favourite'
                           : 'Add favourite',
-                      iconSize: 18,
+                      iconSize: 16,
+                      constraints: const BoxConstraints.tightFor(
+                        width: 32,
+                        height: 32,
+                      ),
+                      padding: EdgeInsets.zero,
+                      style: IconButton.styleFrom(
+                        backgroundColor: const Color(0xFF382B56),
+                        foregroundColor: const Color(0xFFBDA7FF),
+                      ),
                       icon: Icon(
                         item.favorite ? Icons.star : Icons.star_border,
                       ),
@@ -2643,7 +2757,7 @@ class _LibraryScreenState extends State<LibraryScreen>
               ),
             ),
             Padding(
-              padding: const EdgeInsets.only(left: 10),
+              padding: const EdgeInsets.only(left: 8),
               child: Row(
                 children: [
                   Expanded(
@@ -2651,86 +2765,96 @@ class _LibraryScreenState extends State<LibraryScreen>
                       item.name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                   if (!picker)
-                    PopupMenuButton<String>(
-                      tooltip: 'Item options',
-                      onSelected: (action) async {
-                        if (action == 'rename') {
-                          final name = await _askName(
-                            'Rename item',
-                            initial: item.name,
-                          );
-                          if (name != null) {
-                            await widget.store.updateItem(item, name: name);
+                    SizedBox(
+                      width: 32,
+                      height: 32,
+                      child: PopupMenuButton<String>(
+                        tooltip: 'Item options',
+                        iconSize: 18,
+                        padding: EdgeInsets.zero,
+                        onSelected: (action) async {
+                          if (action == 'rename') {
+                            final name = await _askName(
+                              'Rename item',
+                              initial: item.name,
+                            );
+                            if (name != null) {
+                              await widget.store.updateItem(item, name: name);
+                            }
                           }
-                        }
-                        if (action == 'delete') {
-                          await widget.store.deleteItem(item);
-                        }
-                        if (action == 'source' && item.sourcePage != null) {
-                          await Clipboard.setData(
-                            ClipboardData(text: item.sourcePage!),
-                          );
-                          _showError('Source link copied');
-                        }
-                        if (action == 'share' && Platform.isAndroid) {
-                          await AndroidBridge.shareFile(
-                            widget.store.fileFor(item),
-                          );
-                        }
-                        if (action.startsWith('move:')) {
-                          await widget.store.updateItem(
-                            item,
-                            move: true,
-                            folderId: action.substring(5).isEmpty
-                                ? null
-                                : action.substring(5),
-                          );
-                        }
-                      },
-                      itemBuilder: (_) => [
-                        const PopupMenuItem(
-                          value: 'rename',
-                          child: Text('Rename'),
-                        ),
-                        if (Platform.isAndroid)
+                          if (action == 'delete') {
+                            await widget.store.deleteItem(item);
+                          }
+                          if (action == 'source' && item.sourcePage != null) {
+                            await Clipboard.setData(
+                              ClipboardData(text: item.sourcePage!),
+                            );
+                            _showError('Source link copied');
+                          }
+                          if (action == 'share' && Platform.isAndroid) {
+                            await AndroidBridge.shareFile(
+                              widget.store.fileFor(item),
+                            );
+                          }
+                          if (action.startsWith('move:')) {
+                            await widget.store.updateItem(
+                              item,
+                              move: true,
+                              folderId: action.substring(5).isEmpty
+                                  ? null
+                                  : action.substring(5),
+                            );
+                          }
+                        },
+                        itemBuilder: (_) => [
                           const PopupMenuItem(
-                            value: 'share',
-                            child: Text('Share to another app'),
+                            value: 'rename',
+                            child: Text('Rename'),
                           ),
-                        if (item.sourcePage != null)
+                          if (Platform.isAndroid)
+                            const PopupMenuItem(
+                              value: 'share',
+                              child: Text('Share to another app'),
+                            ),
+                          if (item.sourcePage != null)
+                            const PopupMenuItem(
+                              value: 'source',
+                              child: Text('Copy source link'),
+                            ),
                           const PopupMenuItem(
-                            value: 'source',
-                            child: Text('Copy source link'),
+                            value: 'move:',
+                            child: Text('Move to All items'),
                           ),
-                        const PopupMenuItem(
-                          value: 'move:',
-                          child: Text('Move to All items'),
-                        ),
-                        ...widget.store.folders.map(
-                          (folder) => PopupMenuItem(
-                            value: 'move:${folder.id}',
-                            child: Text('Move to ${folder.name}'),
+                          ...widget.store.folders.map(
+                            (folder) => PopupMenuItem(
+                              value: 'move:${folder.id}',
+                              child: Text('Move to ${folder.name}'),
+                            ),
                           ),
-                        ),
-                        const PopupMenuItem(
-                          value: 'delete',
-                          child: Text('Delete'),
-                        ),
-                      ],
+                          const PopupMenuItem(
+                            value: 'delete',
+                            child: Text('Delete'),
+                          ),
+                        ],
+                      ),
                     ),
                 ],
               ),
             ),
             if (!picker && item.tags.isNotEmpty)
               SizedBox(
-                height: 19,
+                height: 15,
                 child: Align(
                   alignment: Alignment.centerLeft,
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
                     child: Text(
                       item.tags.map((tag) => '#$tag').join('  '),
                       maxLines: 1,
@@ -2747,7 +2871,9 @@ class _LibraryScreenState extends State<LibraryScreen>
         ),
       ),
     );
-    if (!picker && Theme.of(context).platform == TargetPlatform.android) {
+    if (!picker &&
+        Theme.of(context).platform == TargetPlatform.android &&
+        (!selectedItemIds.contains(item.id) || mobileSelecting)) {
       return GestureDetector(
         onLongPressStart: (_) => setState(() {
           mobileSelecting = true;
@@ -2756,8 +2882,8 @@ class _LibraryScreenState extends State<LibraryScreen>
         }),
         onLongPressMoveUpdate: (details) =>
             _selectItemAt(details.globalPosition),
-        onLongPressEnd: (_) => mobileSelecting = false,
-        onLongPressCancel: () => mobileSelecting = false,
+        onLongPressEnd: (_) => setState(() => mobileSelecting = false),
+        onLongPressCancel: () => setState(() => mobileSelecting = false),
         child: card,
       );
     }
@@ -2769,9 +2895,9 @@ class _LibraryScreenState extends State<LibraryScreen>
       Padding(
         padding: EdgeInsets.fromLTRB(
           compact ? 14 : 16,
-          0,
+          compact ? 2 : 10,
           compact ? 14 : 16,
-          10,
+          6,
         ),
         child: Row(
           children: [
@@ -2785,10 +2911,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                 decoration: InputDecoration(
                   prefixIcon: const Icon(Icons.search),
                   hintText: 'Search GIPHY',
-                  isDense: compact,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
+                  isDense: true,
                 ),
               ),
             ),
@@ -2804,7 +2927,10 @@ class _LibraryScreenState extends State<LibraryScreen>
       ),
       Padding(
         padding: EdgeInsets.symmetric(horizontal: compact ? 14 : 16),
-        child: Row(
+        child: Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             ChoiceChip(
               label: const Text('GIFs'),
@@ -2818,7 +2944,6 @@ class _LibraryScreenState extends State<LibraryScreen>
                       }
                     },
             ),
-            const SizedBox(width: 8),
             ChoiceChip(
               label: const Text('Stickers'),
               selected: stickerSearch,
@@ -2831,7 +2956,6 @@ class _LibraryScreenState extends State<LibraryScreen>
                       }
                     },
             ),
-            const Spacer(),
             const Text(
               'Powered by GIPHY',
               style: TextStyle(fontSize: 12, color: Colors.white70),
@@ -2839,23 +2963,12 @@ class _LibraryScreenState extends State<LibraryScreen>
           ],
         ),
       ),
-      const SizedBox(height: 8),
+      const SizedBox(height: 4),
       if (busy) const LinearProgressIndicator(minHeight: 2),
       if (error != null)
         Padding(
           padding: const EdgeInsets.all(12),
           child: Text(error!, style: const TextStyle(color: Colors.redAccent)),
-        ),
-      if (!compact && !GiphyService.librarySavesEnabled)
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 5),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              'Saving to the library will unlock after GIPHY permission is enabled for this build.',
-              style: TextStyle(fontSize: 12, color: Colors.white60),
-            ),
-          ),
         ),
       Expanded(
         child: !giphy.configured
@@ -2873,7 +2986,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                       ),
                       SizedBox(height: 6),
                       Text(
-                        'See README.md for setup',
+                        'Search is unavailable in this build',
                         style: TextStyle(color: Colors.white60),
                       ),
                     ],
@@ -2903,10 +3016,10 @@ class _LibraryScreenState extends State<LibraryScreen>
                       12,
                     ),
                     gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-                      maxCrossAxisExtent: compact ? 145 : 180,
-                      childAspectRatio: 0.94,
-                      crossAxisSpacing: 10,
-                      mainAxisSpacing: 10,
+                      maxCrossAxisExtent: compact ? 145 : 154,
+                      childAspectRatio: 1.02,
+                      crossAxisSpacing: 8,
+                      mainAxisSpacing: 8,
                     ),
                     itemCount: results.length,
                     itemBuilder: (context, index) {
@@ -2919,12 +3032,12 @@ class _LibraryScreenState extends State<LibraryScreen>
                         clipBehavior: Clip.antiAlias,
                         margin: EdgeInsets.zero,
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
+                          borderRadius: BorderRadius.circular(10),
                           side: BorderSide(
                             color: selected
                                 ? const Color(0xFFBDA7FF)
-                                : Colors.transparent,
-                            width: selected ? 2 : 0,
+                                : const Color(0xFF514462),
+                            width: selected ? 2 : 1,
                           ),
                         ),
                         child: InkWell(
@@ -2971,7 +3084,10 @@ class _LibraryScreenState extends State<LibraryScreen>
                                             : item.title,
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(fontSize: 11),
+                                        style: const TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                        ),
                                       ),
                                     ),
                                     if (GiphyService.librarySavesEnabled) ...[
@@ -2980,16 +3096,13 @@ class _LibraryScreenState extends State<LibraryScreen>
                                             ? 'Save to library'
                                             : 'Saved to library',
                                         visualDensity: VisualDensity.compact,
-                                        constraints: compact
-                                            ? const BoxConstraints.tightFor(
-                                                width: 32,
-                                                height: 32,
-                                              )
-                                            : null,
-                                        padding: compact
-                                            ? EdgeInsets.zero
-                                            : null,
-                                        iconSize: compact ? 18 : 19,
+                                        constraints:
+                                            const BoxConstraints.tightFor(
+                                              width: 32,
+                                              height: 32,
+                                            ),
+                                        padding: EdgeInsets.zero,
+                                        iconSize: 18,
                                         onPressed:
                                             saving || busy || saved != null
                                             ? null
@@ -3005,16 +3118,13 @@ class _LibraryScreenState extends State<LibraryScreen>
                                             ? 'Remove favourite'
                                             : 'Add favourite',
                                         visualDensity: VisualDensity.compact,
-                                        constraints: compact
-                                            ? const BoxConstraints.tightFor(
-                                                width: 32,
-                                                height: 32,
-                                              )
-                                            : null,
-                                        padding: compact
-                                            ? EdgeInsets.zero
-                                            : null,
-                                        iconSize: compact ? 18 : 19,
+                                        constraints:
+                                            const BoxConstraints.tightFor(
+                                              width: 32,
+                                              height: 32,
+                                            ),
+                                        padding: EdgeInsets.zero,
+                                        iconSize: 18,
                                         onPressed: saving || busy
                                             ? null
                                             : () => _saveGiphy(
