@@ -195,7 +195,7 @@ class LibraryStore extends ChangeNotifier {
       )
       .firstOrNull;
 
-  Future<void> _save() async {
+  Future<void> _save({bool notify = true}) async {
     final index = File('${root.path}${Platform.pathSeparator}index.json');
     final temp = File('${index.path}.tmp');
     final backup = File('${index.path}.bak');
@@ -224,7 +224,7 @@ class LibraryStore extends ChangeNotifier {
       }
       rethrow;
     }
-    notifyListeners();
+    if (notify) notifyListeners();
   }
 
   Future<void> addFolder(String name, {String? parentId}) async {
@@ -480,8 +480,9 @@ class LibraryStore extends ChangeNotifier {
 
   Future<void> markUsed(LibraryItem item) async {
     item.useCount++;
-    dirtyItems.add(item.id);
-    await _save();
+    // Usage is local presentation metadata. Sending every tap through remote
+    // sync replaces list entries and used to reshuffle the picker.
+    await _save(notify: false);
   }
 
   Future<void> deleteItem(LibraryItem item) async {

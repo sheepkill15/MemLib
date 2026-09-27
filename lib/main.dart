@@ -20,6 +20,7 @@ import 'cloud_controller.dart';
 import 'library_store.dart';
 import 'media_actions.dart';
 import 'picker_navigation.dart';
+import 'release_updater.dart';
 import 'shortcut_settings.dart';
 import 'windows_tray.dart';
 
@@ -217,6 +218,16 @@ class _LibraryScreenState extends State<LibraryScreen>
   final pickerScroll = ScrollController();
   final giphyPickerScroll = ScrollController();
   final libraryGridScroll = ScrollController();
+  static const _pickerPageSize = 16;
+  static const _libraryPageSize = 24;
+  int _pickerLoadedCount = _pickerPageSize;
+  int _libraryLoadedCount = _libraryPageSize;
+  bool _pickerLoadingMore = false;
+  bool _libraryLoadingMore = false;
+  bool _pickerLoadQueued = false;
+  bool _libraryLoadQueued = false;
+  int _pickerLoadGeneration = 0;
+  int _libraryLoadGeneration = 0;
   final libraryGridKey = GlobalKey();
   final selectedItemIds = <String>{};
   final selectedTagFilters = <String>{};
@@ -266,6 +277,11 @@ class _LibraryScreenState extends State<LibraryScreen>
         if (mounted) unawaited(_drainAndroidPending());
       });
     }
+    if (Platform.isWindows || Platform.isAndroid) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_checkForUpdates(automatic: true));
+      });
+    }
     if (Platform.isWindows) {
       if (widget.enableTray) unawaited(_loadStartupSetting());
       windowManager.addListener(this);
@@ -310,6 +326,56 @@ class _LibraryScreenState extends State<LibraryScreen>
     }
   }
 
+  void _resetLibraryList() {
+    _libraryLoadGeneration++;
+    _libraryLoadedCount = _libraryPageSize;
+    _libraryLoadingMore = false;
+    _libraryLoadQueued = false;
+    if (libraryGridScroll.hasClients) libraryGridScroll.jumpTo(0);
+  }
+
+  void _queueLibraryPage(int total) {
+    if (_libraryLoadQueued || _libraryLoadedCount >= total) return;
+    _libraryLoadQueued = true;
+    final generation = _libraryLoadGeneration;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || generation != _libraryLoadGeneration) return;
+      setState(() {
+        _libraryLoadingMore = true;
+        _libraryLoadedCount = (_libraryLoadedCount + _libraryPageSize)
+            .clamp(0, total)
+            .toInt();
+        _libraryLoadQueued = false;
+      });
+      Future<void>.delayed(const Duration(milliseconds: 180), () {
+        if (mounted && generation == _libraryLoadGeneration) {
+          setState(() => _libraryLoadingMore = false);
+        }
+      });
+    });
+  }
+
+  void _queuePickerPage(int total) {
+    if (_pickerLoadQueued || _pickerLoadedCount >= total) return;
+    _pickerLoadQueued = true;
+    final generation = _pickerLoadGeneration;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || generation != _pickerLoadGeneration) return;
+      setState(() {
+        _pickerLoadingMore = true;
+        _pickerLoadedCount = (_pickerLoadedCount + _pickerPageSize)
+            .clamp(0, total)
+            .toInt();
+        _pickerLoadQueued = false;
+      });
+      Future<void>.delayed(const Duration(milliseconds: 180), () {
+        if (mounted && generation == _pickerLoadGeneration) {
+          setState(() => _pickerLoadingMore = false);
+        }
+      });
+    });
+  }
+
   @override
   void dispose() {
     if (Platform.isAndroid) {
@@ -350,6 +416,10 @@ class _LibraryScreenState extends State<LibraryScreen>
         selectedFolder = null;
         favoritesOnly = false;
         selectedIndex = 0;
+        _pickerLoadedCount = _pickerPageSize;
+        _libraryLoadedCount = _libraryPageSize;
+        _pickerLoadGeneration++;
+        _libraryLoadGeneration++;
       }
     });
   }
@@ -496,7 +566,9 @@ class _LibraryScreenState extends State<LibraryScreen>
       _selectPickerIndex(
         movePickerSelection(
           selectedIndex,
-          giphyTab ? results.length : visibleItems.length,
+          giphyTab
+              ? results.length
+              : visibleItems.length + (picker ? visibleFolders.length : 0),
           giphyTab ? _giphyPickerColumns : 4,
           direction,
         ),
@@ -514,9 +586,15 @@ class _LibraryScreenState extends State<LibraryScreen>
           );
         }
       } else {
-        final items = visibleItems;
-        if (items.isNotEmpty) {
-          unawaited(_useItem(items[selectedIndex.clamp(0, items.length - 1)]));
+        final folders = picker ? visibleFolders : const <LibraryFolder>[];
+        if (selectedIndex < folders.length) {
+          _openFolder(folders[selectedIndex].id);
+        } else {
+          final items = visibleItems;
+          final itemIndex = selectedIndex - folders.length;
+          if (itemIndex >= 0 && itemIndex < items.length) {
+            unawaited(_useItem(items[itemIndex]));
+          }
         }
       }
       return true;
@@ -525,8 +603,17 @@ class _LibraryScreenState extends State<LibraryScreen>
   }
 
   void _selectPickerIndex(int index) {
-    setState(() => selectedIndex = index);
-    final itemsLength = giphyTab ? results.length : visibleItems.length;
+    setState(() {
+      selectedIndex = index;
+      if (index >= visibleFolders.length + _pickerLoadedCount) {
+        _pickerLoadedCount = (index - visibleFolders.length + 1)
+            .clamp(0, visibleItems.length)
+            .toInt();
+      }
+    });
+    final itemsLength = giphyTab
+        ? results.length
+        : visibleItems.length + (picker ? visibleFolders.length : 0);
     if (index < 0 || index >= itemsLength) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !picker || selectedIndex != index) return;
@@ -582,7 +669,12 @@ class _LibraryScreenState extends State<LibraryScreen>
   }
 
   void _resetPickerList() {
+    _pickerLoadGeneration++;
     selectedIndex = 0;
+    _pickerLoadedCount = _pickerPageSize;
+    _pickerLoadingMore = false;
+    _pickerLoadQueued = false;
+    _resetLibraryList();
     if (pickerScroll.hasClients) pickerScroll.jumpTo(0);
   }
 
@@ -615,6 +707,10 @@ class _LibraryScreenState extends State<LibraryScreen>
         selectedFolder = null;
         favoritesOnly = false;
         selectedIndex = 0;
+        _pickerLoadedCount = _pickerPageSize;
+        _pickerLoadGeneration++;
+        _pickerLoadingMore = false;
+        _pickerLoadQueued = false;
       });
       await windowManager.setAsFrameless();
       await windowManager.setResizable(false);
@@ -889,6 +985,42 @@ class _LibraryScreenState extends State<LibraryScreen>
     }
   }
 
+  Future<void> _previewItem(LibraryItem item) async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => Dialog.fullscreen(
+        child: Scaffold(
+          appBar: AppBar(
+            title: Text(
+              item.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            actions: [
+              IconButton(
+                tooltip: 'Close preview',
+                icon: const Icon(Icons.close),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ],
+          ),
+          body: Center(
+            child: InteractiveViewer(
+              minScale: .5,
+              maxScale: 6,
+              child: Image.file(
+                widget.store.fileFor(item),
+                fit: BoxFit.contain,
+                errorBuilder: (_, _, _) =>
+                    const Icon(Icons.broken_image_outlined, size: 64),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _afterCopy() async {
     if (!picker || !Platform.isWindows) {
       _showError('Copied to clipboard');
@@ -1027,6 +1159,8 @@ class _LibraryScreenState extends State<LibraryScreen>
 
   void _openFolder(String? id) => setState(() {
     selectedFolder = id;
+    _resetLibraryList();
+    _resetPickerList();
     favoritesOnly = false;
     selectedIndex = 0;
     selectedItemIds.clear();
@@ -1158,8 +1292,7 @@ class _LibraryScreenState extends State<LibraryScreen>
     final items = widget.store.items
         .where(
           (item) =>
-              (picker && selectedFolder == null ||
-                  searchController.text.trim().isNotEmpty ||
+              (searchController.text.trim().isNotEmpty ||
                   selectedTagFilters.isNotEmpty ||
                   favoritesOnly ||
                   item.folderId == selectedFolder) &&
@@ -1175,8 +1308,8 @@ class _LibraryScreenState extends State<LibraryScreen>
         )
         .toList();
     items.sort((a, b) {
-      if (a.favorite != b.favorite) return a.favorite ? -1 : 1;
-      return b.useCount.compareTo(a.useCount);
+      final byName = a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      return byName != 0 ? byName : a.id.compareTo(b.id);
     });
     return items;
   }
@@ -1341,6 +1474,7 @@ class _LibraryScreenState extends State<LibraryScreen>
         ..addAll(result);
       selectedItemIds.clear();
       selectionAnchorId = null;
+      _resetLibraryList();
       if (picker) _resetPickerList();
     });
   }
@@ -1689,12 +1823,76 @@ class _LibraryScreenState extends State<LibraryScreen>
     if (action == 'shortcut') unawaited(_changeShortcut());
     if (action == 'startup') unawaited(_toggleStartup());
     if (action == 'keyboard') unawaited(_showKeyboardSetup());
+    if (action == 'updates') unawaited(_checkForUpdates());
     if (action == 'paste') {
       unawaited(
         AndroidBridge.importClipboardImage().catchError((Object e) {
           _showError('Could not import clipboard image: $e');
         }),
       );
+    }
+  }
+
+  Future<void> _checkForUpdates({bool automatic = false}) async {
+    try {
+      final release = await ReleaseUpdater.checkForUpdate();
+      if (!mounted) return;
+      if (release == null) {
+        if (!automatic) _showError('Memlib is up to date.');
+        return;
+      }
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text('Memlib ${release.versionLabel} is available'),
+          content: Text(
+            release.notes.trim().isEmpty
+                ? 'Install the latest version from GitHub Releases?'
+                : release.notes.trim(),
+            maxLines: 8,
+            overflow: TextOverflow.ellipsis,
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Later'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.pop(dialogContext);
+                unawaited(_downloadAndInstallUpdate(release));
+              },
+              child: const Text('Update'),
+            ),
+          ],
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      if (!automatic) _showError('Could not check for updates: $error');
+      debugPrint('Memlib update check failed: $error');
+    }
+  }
+
+  Future<void> _downloadAndInstallUpdate(GithubRelease release) async {
+    try {
+      final asset = Platform.isWindows
+          ? 'MemLib-Windows.zip'
+          : 'MemLib-Android.apk';
+      final file = await ReleaseUpdater.download(release, asset);
+      if (Platform.isWindows) {
+        await ReleaseUpdater.installWindows(file);
+        return;
+      }
+      final launched = await AndroidBridge.installApk(file);
+      if (!mounted) return;
+      if (!launched) {
+        _showError(
+          'Allow Memlib to install unknown apps in Android settings, then choose Check for updates again.',
+        );
+      }
+    } catch (error) {
+      if (mounted) _showError('Could not install the update: $error');
     }
   }
 
@@ -1707,6 +1905,10 @@ class _LibraryScreenState extends State<LibraryScreen>
       itemBuilder: (_) => [
         if (platform == TargetPlatform.windows) ...[
           const PopupMenuItem(
+            value: 'updates',
+            child: Text('Check for updates'),
+          ),
+          const PopupMenuItem(
             value: 'shortcut',
             child: Text('Change picker shortcut'),
           ),
@@ -1717,6 +1919,10 @@ class _LibraryScreenState extends State<LibraryScreen>
           ),
         ],
         if (platform == TargetPlatform.android) ...[
+          const PopupMenuItem(
+            value: 'updates',
+            child: Text('Check for updates'),
+          ),
           const PopupMenuItem(
             value: 'keyboard',
             child: Text('Set up keyboard'),
@@ -1952,6 +2158,7 @@ class _LibraryScreenState extends State<LibraryScreen>
 
   Widget _pickerView() {
     final items = visibleItems;
+    final folders = visibleFolders;
     return DecoratedBox(
       decoration: BoxDecoration(
         color: const Color(0xFF121019),
@@ -2050,26 +2257,32 @@ class _LibraryScreenState extends State<LibraryScreen>
                       _resetPickerList();
                     }),
                   ),
-                  ...widget.store.folders.map(
-                    (folder) => Padding(
-                      padding: const EdgeInsets.only(left: 7),
-                      child: ChoiceChip(
-                        label: Text(folder.name),
-                        selected: selectedFolder == folder.id,
-                        onSelected: (_) => setState(() {
-                          selectedFolder = folder.id;
-                          favoritesOnly = false;
-                          _resetPickerList();
-                        }),
+                  ...(widget.store.folders.toList()..sort((a, b) {
+                        final byName = a.name.toLowerCase().compareTo(
+                          b.name.toLowerCase(),
+                        );
+                        return byName != 0 ? byName : a.id.compareTo(b.id);
+                      }))
+                      .map(
+                        (folder) => Padding(
+                          padding: const EdgeInsets.only(left: 7),
+                          child: ChoiceChip(
+                            label: Text(folder.name),
+                            selected: selectedFolder == folder.id,
+                            onSelected: (_) => setState(() {
+                              selectedFolder = folder.id;
+                              favoritesOnly = false;
+                              _resetPickerList();
+                            }),
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
                 ],
               ),
             ),
             const SizedBox(height: 4),
             Expanded(
-              child: items.isEmpty
+              child: items.isEmpty && folders.isEmpty
                   ? const Center(
                       child: Text(
                         'No matching items',
@@ -2079,21 +2292,41 @@ class _LibraryScreenState extends State<LibraryScreen>
                   : LayoutBuilder(
                       builder: (context, constraints) {
                         pickerGridWidth = constraints.maxWidth;
-                        return GridView.builder(
-                          controller: pickerScroll,
-                          padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-                          gridDelegate:
-                              const SliverGridDelegateWithFixedCrossAxisCount(
-                                crossAxisCount: 4,
-                                childAspectRatio: 1.0,
-                                crossAxisSpacing: 7,
-                                mainAxisSpacing: 7,
+                        return Stack(
+                          children: [
+                            GridView.builder(
+                              controller: pickerScroll,
+                              padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+                              gridDelegate:
+                                  const SliverGridDelegateWithFixedCrossAxisCount(
+                                    crossAxisCount: 4,
+                                    childAspectRatio: 1.0,
+                                    crossAxisSpacing: 7,
+                                    mainAxisSpacing: 7,
+                                  ),
+                              itemCount: folders.length + items.length,
+                              itemBuilder: (context, index) {
+                                if (index < folders.length) {
+                                  return _folderCard(folders[index]);
+                                }
+                                final itemIndex = index - folders.length;
+                                if (itemIndex >= _pickerLoadedCount) {
+                                  _queuePickerPage(items.length);
+                                  return const SizedBox.expand();
+                                }
+                                return _itemCard(
+                                  items[itemIndex],
+                                  selected: index == selectedIndex,
+                                );
+                              },
+                            ),
+                            if (_pickerLoadingMore)
+                              Positioned(
+                                right: 12,
+                                bottom: 12,
+                                child: _smallLoadingIndicator(),
                               ),
-                          itemCount: items.length,
-                          itemBuilder: (context, index) => _itemCard(
-                            items[index],
-                            selected: index == selectedIndex,
-                          ),
+                          ],
                         );
                       },
                     ),
@@ -2294,270 +2527,292 @@ class _LibraryScreenState extends State<LibraryScreen>
     ),
   );
 
-  Widget _libraryView(bool wide) => Column(
-    children: [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-        child: Row(
-          children: [
-            if (!wide && selectedFolder != null && !favoritesOnly)
-              IconButton(
-                tooltip: 'Up one folder',
-                icon: const Icon(Icons.arrow_back, size: 19),
-                onPressed: () => _openFolder(currentFolder?.parentId),
-              ),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    searchController.text.trim().isNotEmpty ||
-                            selectedTagFilters.isNotEmpty
-                        ? 'Search results'
-                        : favoritesOnly
-                        ? 'Favourites'
-                        : currentFolder?.name ?? 'Your library',
-                    style: const TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: -.35,
-                    ),
-                  ),
-                  const SizedBox(height: 1),
-                  Text(
-                    '${visibleFolders.length} ${visibleFolders.length == 1 ? 'folder' : 'folders'} · ${visibleItems.length} ${visibleItems.length == 1 ? 'item' : 'items'}',
-                    style: const TextStyle(
-                      color: Color(0xFFB8B2C4),
-                      fontSize: 11,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            if (!favoritesOnly &&
-                searchController.text.trim().isEmpty &&
-                selectedTagFilters.isEmpty)
-              IconButton(
-                tooltip: 'New folder',
-                onPressed: () async {
-                  final name = await _askName(
-                    selectedFolder == null ? 'New folder' : 'New subfolder',
-                  );
-                  if (name != null) {
-                    await widget.store.addFolder(
-                      name,
-                      parentId: selectedFolder,
-                    );
-                  }
-                },
-                icon: const Icon(Icons.create_new_folder_outlined),
-              ),
-            if (currentFolder != null && !favoritesOnly)
-              _folderMenu(currentFolder!),
-            if (wide)
-              FilledButton.icon(
-                onPressed: _import,
-                icon: const Icon(Icons.add_photo_alternate_outlined),
-                label: const Text('Import'),
-              ),
-          ],
-        ),
-      ),
-      if (!wide)
-        SizedBox(
-          height: 44,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
+  Widget _libraryView(bool wide) {
+    final loadedFolders = visibleFolders;
+    final loadedItems = visibleItems;
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+          child: Row(
             children: [
-              _dropOn(
-                null,
-                ChoiceChip(
-                  label: const Text('All items'),
-                  selected: selectedFolder == null && !favoritesOnly,
-                  onSelected: (_) => _openFolder(null),
+              if (!wide && selectedFolder != null && !favoritesOnly)
+                IconButton(
+                  tooltip: 'Up one folder',
+                  icon: const Icon(Icons.arrow_back, size: 19),
+                  onPressed: () => _openFolder(currentFolder?.parentId),
                 ),
-              ),
-              const SizedBox(width: 8),
-              ChoiceChip(
-                label: const Text('★ Favourites'),
-                selected: favoritesOnly,
-                onSelected: (_) => setState(() {
-                  selectedFolder = null;
-                  favoritesOnly = true;
-                  selectedItemIds.clear();
-                  selectionAnchorId = null;
-                }),
-              ),
-              ...foldersIn(null).map(
-                (folder) => Padding(
-                  padding: const EdgeInsets.only(left: 8),
-                  child: _dropOn(
-                    folder.id,
-                    ChoiceChip(
-                      label: Text(folder.name),
-                      selected: selectedFolder == folder.id,
-                      onSelected: (_) => _openFolder(folder.id),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      searchController.text.trim().isNotEmpty ||
+                              selectedTagFilters.isNotEmpty
+                          ? 'Search results'
+                          : favoritesOnly
+                          ? 'Favourites'
+                          : currentFolder?.name ?? 'Your library',
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -.35,
+                      ),
                     ),
-                  ),
+                    const SizedBox(height: 1),
+                    Text(
+                      '${visibleFolders.length} ${visibleFolders.length == 1 ? 'folder' : 'folders'} · ${visibleItems.length} ${visibleItems.length == 1 ? 'item' : 'items'}',
+                      style: const TextStyle(
+                        color: Color(0xFFB8B2C4),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
                 ),
               ),
+              if (!favoritesOnly &&
+                  searchController.text.trim().isEmpty &&
+                  selectedTagFilters.isEmpty)
+                IconButton(
+                  tooltip: 'New folder',
+                  onPressed: () async {
+                    final name = await _askName(
+                      selectedFolder == null ? 'New folder' : 'New subfolder',
+                    );
+                    if (name != null) {
+                      await widget.store.addFolder(
+                        name,
+                        parentId: selectedFolder,
+                      );
+                    }
+                  },
+                  icon: const Icon(Icons.create_new_folder_outlined),
+                ),
+              if (currentFolder != null && !favoritesOnly)
+                _folderMenu(currentFolder!),
+              if (wide)
+                FilledButton.icon(
+                  onPressed: _import,
+                  icon: const Icon(Icons.add_photo_alternate_outlined),
+                  label: const Text('Import'),
+                ),
             ],
           ),
         ),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
-        child: Row(
-          children: [
-            Expanded(
-              child: TextField(
-                focusNode: searchFocus,
-                controller: searchController,
-                onChanged: (_) => setState(() {
-                  selectedItemIds.clear();
-                  selectionAnchorId = null;
-                }),
-                decoration: InputDecoration(
-                  prefixIcon: const Icon(Icons.search),
-                  hintText: 'Search names and tags',
-                  isDense: true,
+        if (!wide)
+          SizedBox(
+            height: 44,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              children: [
+                _dropOn(
+                  null,
+                  ChoiceChip(
+                    label: const Text('All items'),
+                    selected: selectedFolder == null && !favoritesOnly,
+                    onSelected: (_) => _openFolder(null),
+                  ),
                 ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            _tagFilterButton(),
-          ],
-        ),
-      ),
-      Expanded(
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: visibleItems.isEmpty && visibleFolders.isEmpty
-                  ? Center(
-                      child: SingleChildScrollView(
-                        child: Padding(
-                          padding: const EdgeInsets.all(24),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                width: 92,
-                                height: 92,
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF24202E),
-                                  borderRadius: BorderRadius.circular(26),
-                                ),
-                                child: const Icon(
-                                  Icons.collections_bookmark_outlined,
-                                  size: 46,
-                                  color: Color(0xFFBDA7FF),
-                                ),
-                              ),
-                              const SizedBox(height: 18),
-                              Text(
-                                widget.store.items.isEmpty
-                                    ? 'Build your collection'
-                                    : 'Nothing found',
-                                style: const TextStyle(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              const SizedBox(height: 6),
-                              Text(
-                                widget.store.items.isEmpty
-                                    ? Platform.isAndroid
-                                          ? 'Import GIFs and stickers, then reach them from any text field with the Memlib keyboard.'
-                                          : 'Import GIFs and stickers, then reach them from anywhere with the quick picker.'
-                                    : 'Try another search or choose a different folder.',
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(color: Colors.white60),
-                              ),
-                              const SizedBox(height: 18),
-                              FilledButton.icon(
-                                onPressed: _import,
-                                icon: const Icon(
-                                  Icons.add_photo_alternate_outlined,
-                                ),
-                                label: const Text('Import images'),
-                              ),
-                              if (Platform.isWindows)
-                                const Padding(
-                                  padding: EdgeInsets.only(top: 10),
-                                  child: Text(
-                                    'Drop images here, or copy image files in Explorer and press Ctrl+V',
-                                    style: TextStyle(
-                                      color: Colors.white54,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
+                const SizedBox(width: 8),
+                ChoiceChip(
+                  label: const Text('★ Favourites'),
+                  selected: favoritesOnly,
+                  onSelected: (_) => setState(() {
+                    selectedFolder = null;
+                    favoritesOnly = true;
+                    selectedItemIds.clear();
+                    selectionAnchorId = null;
+                    _resetLibraryList();
+                  }),
+                ),
+                ...foldersIn(null).map(
+                  (folder) => Padding(
+                    padding: const EdgeInsets.only(left: 8),
+                    child: _dropOn(
+                      folder.id,
+                      ChoiceChip(
+                        label: Text(folder.name),
+                        selected: selectedFolder == folder.id,
+                        onSelected: (_) => _openFolder(folder.id),
                       ),
-                    )
-                  : GridView.builder(
-                      key: libraryGridKey,
-                      controller: libraryGridScroll,
-                      padding: EdgeInsets.fromLTRB(
-                        16,
-                        0,
-                        16,
-                        selectedItemIds.isEmpty ? 16 : 80,
-                      ),
-                      gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-                        maxCrossAxisExtent: 154,
-                        childAspectRatio: 1.02,
-                        crossAxisSpacing: 8,
-                        mainAxisSpacing: 8,
-                      ),
-                      itemCount: visibleFolders.length + visibleItems.length,
-                      itemBuilder: (context, index) {
-                        if (index < visibleFolders.length) {
-                          return _folderCard(visibleFolders[index]);
-                        }
-                        final item =
-                            visibleItems[index - visibleFolders.length];
-                        final drag = _dragDataForItem(item);
-                        return _drag(
-                          drag,
-                          drag.itemIds.length == 1
-                              ? item.name
-                              : '${drag.itemIds.length} items',
-                          Icons.image_outlined,
-                          _itemCard(item),
-                        );
-                      },
-                    ),
-            ),
-            if (selectedItemIds.isNotEmpty)
-              Positioned(
-                left: 12,
-                right: 12,
-                bottom: 16,
-                child: LayoutBuilder(
-                  builder: (context, constraints) => Center(
-                    child: _selectionToolbar(
-                      compact: constraints.maxWidth < 360,
                     ),
                   ),
                 ),
+              ],
+            ),
+          ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  focusNode: searchFocus,
+                  controller: searchController,
+                  onChanged: (_) => setState(() {
+                    selectedItemIds.clear();
+                    selectionAnchorId = null;
+                    _resetLibraryList();
+                  }),
+                  decoration: InputDecoration(
+                    prefixIcon: const Icon(Icons.search),
+                    hintText: 'Search names and tags',
+                    isDense: true,
+                  ),
+                ),
               ),
-          ],
-        ),
-      ),
-      if (picker && Platform.isWindows)
-        const Padding(
-          padding: EdgeInsets.all(8),
-          child: Text(
-            'Ctrl+Alt+V · Tap an item to paste into the previous app',
-            style: TextStyle(color: Colors.white54, fontSize: 12),
+              const SizedBox(width: 8),
+              _tagFilterButton(),
+            ],
           ),
         ),
-    ],
-  );
+        Expanded(
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: loadedItems.isEmpty && loadedFolders.isEmpty
+                    ? Center(
+                        child: SingleChildScrollView(
+                          child: Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  width: 92,
+                                  height: 92,
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF24202E),
+                                    borderRadius: BorderRadius.circular(26),
+                                  ),
+                                  child: const Icon(
+                                    Icons.collections_bookmark_outlined,
+                                    size: 46,
+                                    color: Color(0xFFBDA7FF),
+                                  ),
+                                ),
+                                const SizedBox(height: 18),
+                                Text(
+                                  widget.store.items.isEmpty
+                                      ? 'Build your collection'
+                                      : 'Nothing found',
+                                  style: const TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  widget.store.items.isEmpty
+                                      ? Platform.isAndroid
+                                            ? 'Import GIFs and stickers, then reach them from any text field with the Memlib keyboard.'
+                                            : 'Import GIFs and stickers, then reach them from anywhere with the quick picker.'
+                                      : 'Try another search or choose a different folder.',
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(color: Colors.white60),
+                                ),
+                                const SizedBox(height: 18),
+                                FilledButton.icon(
+                                  onPressed: _import,
+                                  icon: const Icon(
+                                    Icons.add_photo_alternate_outlined,
+                                  ),
+                                  label: const Text('Import images'),
+                                ),
+                                if (Platform.isWindows)
+                                  const Padding(
+                                    padding: EdgeInsets.only(top: 10),
+                                    child: Text(
+                                      'Drop images here, or copy image files in Explorer and press Ctrl+V',
+                                      style: TextStyle(
+                                        color: Colors.white54,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      )
+                    : Stack(
+                        children: [
+                          GridView.builder(
+                            key: libraryGridKey,
+                            controller: libraryGridScroll,
+                            padding: EdgeInsets.fromLTRB(
+                              16,
+                              0,
+                              16,
+                              selectedItemIds.isEmpty ? 16 : 80,
+                            ),
+                            gridDelegate:
+                                SliverGridDelegateWithMaxCrossAxisExtent(
+                                  maxCrossAxisExtent: 154,
+                                  childAspectRatio: 1.02,
+                                  crossAxisSpacing: 8,
+                                  mainAxisSpacing: 8,
+                                ),
+                            itemCount:
+                                loadedFolders.length + loadedItems.length,
+                            itemBuilder: (context, index) {
+                              if (index < loadedFolders.length) {
+                                return _folderCard(loadedFolders[index]);
+                              }
+                              final itemIndex = index - loadedFolders.length;
+                              if (itemIndex >= _libraryLoadedCount) {
+                                _queueLibraryPage(loadedItems.length);
+                                return const SizedBox.expand();
+                              }
+                              final item = loadedItems[itemIndex];
+                              final drag = _dragDataForItem(item);
+                              return _drag(
+                                drag,
+                                drag.itemIds.length == 1
+                                    ? item.name
+                                    : '${drag.itemIds.length} items',
+                                Icons.image_outlined,
+                                _itemCard(item),
+                              );
+                            },
+                          ),
+                          if (_libraryLoadingMore)
+                            Positioned(
+                              right: 14,
+                              bottom: 14,
+                              child: _smallLoadingIndicator(),
+                            ),
+                        ],
+                      ),
+              ),
+              if (selectedItemIds.isNotEmpty)
+                Positioned(
+                  left: 12,
+                  right: 12,
+                  bottom: 16,
+                  child: LayoutBuilder(
+                    builder: (context, constraints) => Center(
+                      child: _selectionToolbar(
+                        compact: constraints.maxWidth < 360,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        if (picker && Platform.isWindows)
+          const Padding(
+            padding: EdgeInsets.all(8),
+            child: Text(
+              'Ctrl+Alt+V · Tap an item to paste into the previous app',
+              style: TextStyle(color: Colors.white54, fontSize: 12),
+            ),
+          ),
+      ],
+    );
+  }
 
   Widget _folderCard(LibraryFolder folder) {
     final subfolders = foldersIn(folder.id).length;
@@ -2753,6 +3008,21 @@ class _LibraryScreenState extends State<LibraryScreen>
                       ),
                     ),
                   ),
+                  Positioned(
+                    bottom: 2,
+                    right: 2,
+                    child: IconButton.filledTonal(
+                      tooltip: 'Preview ${item.name}',
+                      icon: const Icon(Icons.zoom_out_map, size: 13),
+                      iconSize: 13,
+                      constraints: const BoxConstraints.tightFor(
+                        width: 24,
+                        height: 24,
+                      ),
+                      padding: EdgeInsets.zero,
+                      onPressed: () => _previewItem(item),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -2803,6 +3073,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                               widget.store.fileFor(item),
                             );
                           }
+
                           if (action.startsWith('move:')) {
                             await widget.store.updateItem(
                               item,
@@ -2889,6 +3160,22 @@ class _LibraryScreenState extends State<LibraryScreen>
     }
     return card;
   }
+
+  Widget _smallLoadingIndicator() => DecoratedBox(
+    decoration: BoxDecoration(
+      color: const Color(0xE61B1724),
+      borderRadius: BorderRadius.circular(20),
+      border: Border.all(color: const Color(0xFF514462)),
+    ),
+    child: const Padding(
+      padding: EdgeInsets.all(5),
+      child: SizedBox(
+        width: 16,
+        height: 16,
+        child: CircularProgressIndicator(strokeWidth: 2),
+      ),
+    ),
+  );
 
   Widget _giphyView({bool compact = false}) => Column(
     children: [

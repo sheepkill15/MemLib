@@ -67,6 +67,8 @@ The [GitHub Actions workflow](.github/workflows/signed-builds.yml) runs analysis
 
 The permanent Android upload keystore and Windows signing PFX were generated locally in `%USERPROFILE%\.memlib-signing`, outside this Git repository. Keep an offline backup of this directory; losing the Android key can prevent future updates signed with the same identity. The Android application ID is `com.sheepkill15.memlib`. The Windows certificate is self-signed for development: the EXE is Authenticode signed, but other Windows machines will not trust its publisher until you replace the PFX with a certificate from a trusted code-signing provider. The workflow accepts a replacement PFX using the same secret names.
 
+Memlib checks GitHub Releases at startup and prompts when a newer build is available. You can also use **Check for updates** in Settings. Windows downloads the release ZIP, replaces the app files, and restarts Memlib; the app folder must be writable by your Windows account. Android downloads the signed APK and opens Android's installer. Android may ask you to allow Memlib to install apps from this source, and you must confirm the installation.
+
 Add these **repository Actions secrets** under GitHub Settings → Secrets and variables → Actions before merging the workflow into `master`:
 
 | Secret | Local source |

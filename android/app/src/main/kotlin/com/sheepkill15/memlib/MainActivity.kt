@@ -143,6 +143,24 @@ class MainActivity : FlutterActivity() {
                         startActivity(Intent.createChooser(send, "Share sticker or GIF"))
                         result.success(null)
                     }
+                    "installApk" -> {
+                        val file = checkedAppFile(call.argument<String>("path"))
+                        require(file.extension.equals("apk", ignoreCase = true)) { "Update file is not an APK" }
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
+                            !packageManager.canRequestPackageInstalls()) {
+                            startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                                data = Uri.parse("package:$packageName")
+                            })
+                            result.success(false)
+                        } else {
+                            val install = Intent(Intent.ACTION_VIEW).apply {
+                                setDataAndType(providerUri(file), "application/vnd.android.package-archive")
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            startActivity(install)
+                            result.success(true)
+                        }
+                    }
                     else -> result.notImplemented()
                 }
             } catch (error: Exception) {
