@@ -710,12 +710,8 @@ void main() {
       await tester.tap(find.byIcon(Icons.bolt));
       await tester.pumpAndSettle();
       expect(find.text('Search items and tags'), findsOneWidget);
-      expect(
-        find.text(
-          'Type to search   ·   Arrow keys to move   ·   Enter to paste   ·   Esc to close',
-        ),
-        findsOneWidget,
-      );
+      expect(find.text('Paste'), findsOneWidget);
+      expect(find.text('Esc'), findsOneWidget);
       expect(find.byType(AppBar), findsNothing);
       await tester.tap(find.text('GIPHY'));
       await tester.pumpAndSettle();
