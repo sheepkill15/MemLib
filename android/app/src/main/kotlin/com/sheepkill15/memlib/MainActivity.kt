@@ -97,7 +97,8 @@ class MainActivity : FlutterActivity() {
                                 val entry = queue.getJSONObject(index)
                                 mapOf("id" to entry.getString("id"), "name" to entry.getString("name"),
                                     "sourcePage" to entry.getString("sourcePage"), "path" to entry.getString("path"),
-                                    "favorite" to entry.getBoolean("favorite"), "toggle" to entry.getBoolean("toggle"))
+                                    "favorite" to entry.getBoolean("favorite"), "toggle" to entry.getBoolean("toggle"),
+                                    "sticker" to entry.optBoolean("sticker"))
                             })
                         }
                     }

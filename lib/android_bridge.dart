@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 
 import 'giphy_service.dart';
+import 'klipy_service.dart';
 import 'library_store.dart';
 
 /// Native Android keyboard and share-sheet entry points. No-op off Android.
@@ -25,7 +26,7 @@ class AndroidBridge {
     if (!Platform.isAndroid) return;
     await _channel.invokeMethod<void>('setLibraryRoot', {
       'path': store.root.path,
-      'giphyKey': GiphyService.androidKey,
+      'giphyKey': KlipyService.androidKey,
       'allowGiphySaves': GiphyService.librarySavesEnabled,
     });
   }

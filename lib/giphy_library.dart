@@ -3,7 +3,7 @@ import 'dart:typed_data';
 import 'giphy_service.dart';
 import 'library_store.dart';
 
-/// GIPHY persistence is enabled only for builds with the required permission.
+/// Provider persistence is enabled only for builds with the required permission.
 class GiphyLibrary {
   GiphyLibrary(
     this.store,
@@ -18,8 +18,17 @@ class GiphyLibrary {
   String sourcePage(GiphyResult result) =>
       result.pageUrl ?? 'https://giphy.com/gifs/${result.id}';
 
+  String sourceType(GiphyResult result) =>
+      sourcePage(result).startsWith('https://static.klipy.com/')
+      ? 'klipy'
+      : 'giphy';
+
+  String sourceId(GiphyResult result) => sourceType(result) == 'klipy'
+      ? '${result.stickers ? 'sticker' : 'gif'}:${result.id}'
+      : result.id;
+
   LibraryItem? savedItem(GiphyResult result) {
-    final byId = store.itemBySource('giphy', result.id);
+    final byId = store.itemBySource(sourceType(result), sourceId(result));
     if (byId != null) return byId;
     final page = sourcePage(result);
     for (final item in store.items) {
@@ -55,10 +64,11 @@ class GiphyLibrary {
       bytes,
       name: result.title.trim().isEmpty ? 'GIPHY GIF' : result.title,
       extension: 'gif',
+      kind: result.stickers ? 'sticker' : 'gif',
       folderId: folderId,
       favorite: favorite,
-      sourceType: 'giphy',
-      sourceId: result.id,
+      sourceType: sourceType(result),
+      sourceId: sourceId(result),
       sourcePage: sourcePage(result),
     );
   }

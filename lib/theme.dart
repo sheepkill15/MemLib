@@ -88,8 +88,8 @@ ThemeData buildMemlibTheme() {
       surfaceTintColor: Colors.transparent,
       elevation: 0,
       scrolledUnderElevation: 0,
-      toolbarHeight: 56,
-      titleSpacing: 16,
+      toolbarHeight: 52,
+      titleSpacing: 14,
       shape: Border(bottom: BorderSide(color: _C.hairline)),
     ),
     cardTheme: CardThemeData(
@@ -250,7 +250,7 @@ ThemeData buildMemlibTheme() {
       surfaceTintColor: Colors.transparent,
       indicatorColor: _C.accentSoft,
       elevation: 0,
-      height: 64,
+      height: 60,
       labelTextStyle: WidgetStateProperty.resolveWith(
         (states) => TextStyle(
           fontSize: 12,
@@ -311,7 +311,11 @@ class BrandMark extends StatelessWidget {
         colors: [MemlibColors.accent, MemlibColors.accentDeep],
       ),
       boxShadow: const [
-        BoxShadow(color: Color(0x408B68FF), blurRadius: 12, offset: Offset(0, 3)),
+        BoxShadow(
+          color: Color(0x408B68FF),
+          blurRadius: 12,
+          offset: Offset(0, 3),
+        ),
       ],
     ),
     child: Icon(
@@ -569,11 +573,7 @@ class TileAction extends StatelessWidget {
         child: SizedBox(
           width: size,
           height: size,
-          child: Icon(
-            icon,
-            size: size * .55,
-            color: color,
-          ),
+          child: Icon(icon, size: size * .55, color: color),
         ),
       ),
     ),

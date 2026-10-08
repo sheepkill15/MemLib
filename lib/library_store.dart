@@ -613,6 +613,7 @@ class LibraryStore extends ChangeNotifier {
     Uint8List bytes, {
     required String name,
     required String extension,
+    String? kind,
     String? folderId,
     String? sourceType,
     String? sourceId,
@@ -622,6 +623,9 @@ class LibraryStore extends ChangeNotifier {
   }) async {
     if (!{'png', 'gif', 'jpg', 'jpeg', 'webp'}.contains(extension)) {
       throw ArgumentError.value(extension, 'extension');
+    }
+    if (kind != null && kind != 'gif' && kind != 'sticker') {
+      throw ArgumentError.value(kind, 'kind');
     }
     if ((sourceType == null) != (sourceId == null)) {
       throw ArgumentError('sourceType and sourceId must be provided together');
@@ -642,7 +646,7 @@ class LibraryStore extends ChangeNotifier {
       id: id,
       name: name.trim().isEmpty ? 'Untitled' : name.trim(),
       filename: filename,
-      kind: extension == 'gif' ? 'gif' : 'sticker',
+      kind: kind ?? (extension == 'gif' ? 'gif' : 'sticker'),
       folderId: folderId,
       favorite: favorite,
       sourceType: sourceType ?? 'upload',

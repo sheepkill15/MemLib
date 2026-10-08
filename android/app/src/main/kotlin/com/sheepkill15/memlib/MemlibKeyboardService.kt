@@ -48,7 +48,7 @@ class MemlibKeyboardService : InputMethodService() {
     private data class Item(val id: String, val name: String, val filename: String, val folderId: String?, val favorite: Boolean, val uses: Int, val sourceType: String, val sourceId: String, val sourcePage: String?, val tags: List<String>)
     private data class Folder(val id: String, val name: String, val parentId: String?)
     private data class GiphyItem(val id: String, val title: String, val previewUrl: String, val gifUrl: String, val pageUrl: String,
-        val onload: String?, val onclick: String?, val onsent: String?)
+        val onload: String?, val onclick: String?, val onsent: String?, val sticker: Boolean)
 
     // Mirrors lib/theme.dart (MemlibColors).
     private val background = Color.rgb(14, 12, 19)
@@ -199,7 +199,7 @@ class MemlibKeyboardService : InputMethodService() {
                 render()
             }
         })
-        if (hasGiphy) tabs.addView(segment("GIPHY", selected = giphyMode) {
+        if (hasGiphy) tabs.addView(segment("KLIPY", selected = giphyMode) {
             if (!giphyMode) { giphyMode = true; search = ""; searchMode = false; tagFilterMode = false; render() }
         })
         top.addView(tabs, LinearLayout.LayoutParams(-2, dp(34)))
@@ -213,7 +213,7 @@ class MemlibKeyboardService : InputMethodService() {
             setPadding(dp(4), 0, dp(4), 0)
         }
         searchRow.addView(label("⌕", 20, if (searchMode) accent else muted))
-        val searchText = if (search.isNotEmpty()) search else if (giphyMode) "Search GIPHY" else "Search items and tags"
+        val searchText = if (search.isNotEmpty()) search else if (giphyMode) "Search KLIPY" else "Search items and tags"
         searchRow.addView(label(searchText, 14, if (search.isEmpty()) faint else textColor),
             LinearLayout.LayoutParams(0, dp(42), 1f))
         if (!giphyMode && !searchMode) searchRow.addView(pill(if (tagFilters.isEmpty()) "Tags" else "Tags (${tagFilters.size})",
@@ -241,7 +241,7 @@ class MemlibKeyboardService : InputMethodService() {
             kinds.addView(segment("GIFs", selected = !giphyStickers) { giphyStickers = false; if (search.isNotBlank()) searchGiphy(false) else render() })
             kinds.addView(segment("Stickers", selected = giphyStickers) { giphyStickers = true; if (search.isNotBlank()) searchGiphy(false) else render() })
             chips.addView(kinds, LinearLayout.LayoutParams(-2, dp(32)).apply { setMargins(dp(4), 0, 0, 0) })
-            chips.addView(label("Powered by GIPHY", 11, faint).apply { gravity = Gravity.CENTER_VERTICAL or Gravity.END },
+            chips.addView(label("Powered by KLIPY", 11, faint).apply { gravity = Gravity.CENTER_VERTICAL or Gravity.END },
                 LinearLayout.LayoutParams(0, dp(38), 1f))
             rootView.addView(chips)
         } else if (!searchMode && !tagFilterMode) {
@@ -290,10 +290,10 @@ class MemlibKeyboardService : InputMethodService() {
                 repeat(columns - batch.size) { line.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f)) }
                 grid.addView(line)
             }
-            if (giphyHasMore) grid.addView(pill("More GIPHY results") { searchGiphy(true) },
+            if (giphyHasMore) grid.addView(pill("More KLIPY results") { searchGiphy(true) },
                 LinearLayout.LayoutParams(-1, dp(38)).apply { setMargins(dp(3), dp(6), dp(3), dp(3)) })
         } else if (giphyMode) {
-            grid.addView(emptyMessage(if (giphyBusy) "Searching GIPHY…" else "Type a reaction and press Search"),
+            grid.addView(emptyMessage(if (giphyBusy) "Searching KLIPY…" else "Type a reaction and press Search"),
                 LinearLayout.LayoutParams(-1, dp(110)))
         } else if (matching.isEmpty() && matchingFolders.isEmpty()) {
             grid.addView(emptyMessage(if (items.isEmpty()) "Your library is empty. Open Memlib to add items." else "No matching stickers or GIFs"),
@@ -350,7 +350,7 @@ class MemlibKeyboardService : InputMethodService() {
             rootView.addView(View(this).apply { setBackgroundColor(hairline) }, LinearLayout.LayoutParams(-1, dp(1)).apply {
                 setMargins(0, dp(4), 0, 0)
             })
-            statusView = label(if (searchMode) "Powered by GIPHY" else if (tagFilterMode) "Items must match every selected tag" else status, 11, faint).apply {
+            statusView = label(if (searchMode) "Powered by KLIPY" else if (tagFilterMode) "Items must match every selected tag" else status, 11, faint).apply {
                 gravity = Gravity.CENTER
             }
             rootView.addView(statusView, LinearLayout.LayoutParams(-1, dp(22)))
@@ -454,7 +454,7 @@ class MemlibKeyboardService : InputMethodService() {
         }, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.BOTTOM or Gravity.RIGHT).apply { setMargins(0, 0, dp(5), dp(3)) })
         if (item.favorite) imageArea.addView(label("★", 15, star).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, 0) },
             FrameLayout.LayoutParams(dp(26), dp(26), Gravity.TOP or Gravity.RIGHT).apply { setMargins(0, dp(3), dp(3), 0) })
-        if (item.sourceType == "giphy") imageArea.addView(label("GIPHY", 9, textColor, true).apply {
+        if (item.sourceType == "giphy" || item.sourceType == "klipy") imageArea.addView(label(if (item.sourceType == "giphy") "GIPHY" else "KLIPY", 9, textColor, true).apply {
             background = rounded(Color.argb(204, 14, 12, 19), 6)
             setPadding(dp(5), 0, dp(5), 0)
         }, FrameLayout.LayoutParams(-2, dp(18), Gravity.BOTTOM or Gravity.LEFT).apply {
@@ -484,7 +484,8 @@ class MemlibKeyboardService : InputMethodService() {
         giphyPreviews[item.id]?.let { showRemotePreview(preview, it) } ?: loadGiphyPreview(item, preview)
         imageArea.addView(preview, FrameLayout.LayoutParams(-1, -1))
         if (getSharedPreferences("memlib_keyboard", MODE_PRIVATE).getBoolean("allow_giphy_saves", false)) {
-            val saved = items.firstOrNull { (it.sourceType == "giphy" && it.sourceId == item.id) || it.sourcePage == item.pageUrl }
+            val sourceId = "${if (item.sticker) "sticker" else "gif"}:${item.id}"
+            val saved = items.firstOrNull { (it.sourceType == "klipy" && it.sourceId == sourceId) || it.sourcePage == item.pageUrl }
             val pendingSave = isGiphySaveQueued(item)
             imageArea.addView(overlayAction(if (saved == null && !pendingSave) "+" else "✓", "Save to library") {
                 if (saved == null && !pendingSave) queueGiphySave(item, favorite = false, toggle = false)
@@ -495,8 +496,8 @@ class MemlibKeyboardService : InputMethodService() {
             }, FrameLayout.LayoutParams(dp(30), dp(30), Gravity.TOP or Gravity.LEFT).apply { setMargins(dp(4), dp(4), 0, 0) })
         }
         outer.addView(imageArea, LinearLayout.LayoutParams(-1, 0, 1f))
-        outer.addView(label(item.title.ifBlank { "GIPHY" }, 11, muted), LinearLayout.LayoutParams(-1, dp(22)))
-        outer.contentDescription = "${item.title.ifBlank { "GIPHY GIF" }}. Tap to send, hold to share"
+        outer.addView(label(item.title.ifBlank { "KLIPY" }, 11, muted), LinearLayout.LayoutParams(-1, dp(22)))
+        outer.contentDescription = "${item.title.ifBlank { "KLIPY GIF" }}. Tap to send, hold to share"
         outer.isHapticFeedbackEnabled = true
         outer.setOnClickListener { view -> view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY); downloadGiphy(item, share = false) }
         outer.setOnLongClickListener { downloadGiphy(item, share = true); true }
@@ -505,43 +506,55 @@ class MemlibKeyboardService : InputMethodService() {
 
     private fun searchGiphy(more: Boolean) {
         val key = getSharedPreferences("memlib_keyboard", MODE_PRIVATE).getString("giphy_key", "").orEmpty()
-        if (key.isBlank()) { notice("Add the GIPHY Android key to this build."); return }
+        if (key.isBlank()) { notice("Add the KLIPY Android key to this build."); return }
         if (search.isBlank() || giphyBusy) return
         val generation = ++giphyGeneration
         val query = search.trim()
-        val offset = if (more) giphyOffset else 0
+        val page = if (more) giphyOffset else 1
         giphyBusy = true
         if (!more) { giphyResults = emptyList(); giphyPreviews.clear(); giphyHasMore = false }
         render()
         Thread {
             try {
-                val uri = Uri.Builder().scheme("https").authority("api.giphy.com")
-                    .appendPath("v1").appendPath(if (giphyStickers) "stickers" else "gifs").appendPath("search")
-                    .appendQueryParameter("api_key", key).appendQueryParameter("q", query)
-                    .appendQueryParameter("limit", "12").appendQueryParameter("offset", offset.toString())
-                    .appendQueryParameter("rating", "pg").build()
-                val json = JSONObject(String(fetchBytes(uri.toString(), 2 * 1024 * 1024), Charsets.UTF_8))
-                val data = json.optJSONArray("data") ?: JSONArray()
-                val found = (0 until data.length()).mapNotNull { index ->
-                    val row = data.optJSONObject(index) ?: return@mapNotNull null
-                    val images = row.optJSONObject("images") ?: return@mapNotNull null
-                    val preview = (images.optJSONObject("fixed_width_small") ?: images.optJSONObject("fixed_width"))?.optString("url").orEmpty()
-                    val original = images.optJSONObject("original")?.optString("url").orEmpty()
-                    if (!isGiphyMedia(preview) || !isGiphyMedia(original)) return@mapNotNull null
-                    val analytics = row.optJSONObject("analytics")
-                    val page = row.optString("url").takeIf { it.startsWith("https://giphy.com/") } ?: "https://giphy.com/gifs/${row.optString("id")}"
-                    GiphyItem(row.optString("id"), row.optString("title"), preview, original, page,
-                        analytics?.optJSONObject("onload")?.optString("url"),
-                        analytics?.optJSONObject("onclick")?.optString("url"),
-                        analytics?.optJSONObject("onsent")?.optString("url"))
+                val prefs = getSharedPreferences("memlib_keyboard", MODE_PRIVATE)
+                val customerId = prefs.getString("klipy_customer_id", null) ?: UUID.randomUUID().toString().also {
+                    prefs.edit().putString("klipy_customer_id", it).apply()
                 }
-                val count = json.optJSONObject("pagination")?.optInt("count", found.size) ?: found.size
-                val total = json.optJSONObject("pagination")?.optInt("total_count", offset + count) ?: offset + count
+                val kind = if (giphyStickers) "stickers" else "gifs"
+                val uri = Uri.Builder().scheme("https").authority("api.klipy.com")
+                    .appendPath("api").appendPath("v1").appendPath(key)
+                    .appendPath(kind).appendPath("search")
+                    .appendQueryParameter("page", page.toString())
+                    .appendQueryParameter("per_page", "12")
+                    .appendQueryParameter("q", query)
+                    .appendQueryParameter("customer_id", customerId)
+                    .appendQueryParameter("content_filter", "medium")
+                    .appendQueryParameter("format_filter", "gif").build()
+                val json = JSONObject(String(fetchBytes(uri.toString(), 2 * 1024 * 1024), Charsets.UTF_8))
+                require(json.optBoolean("result")) { "KLIPY search failed" }
+                val data = json.optJSONObject("data") ?: JSONObject()
+                val rows = data.optJSONArray("data") ?: JSONArray()
+                val found = (0 until rows.length()).mapNotNull { index ->
+                    val row = rows.optJSONObject(index) ?: return@mapNotNull null
+                    if (row.optString("type") == "ad") return@mapNotNull null
+                    val files = row.optJSONObject("file") ?: return@mapNotNull null
+                    fun gif(size: String) = files.optJSONObject(size)?.optJSONObject("gif")?.optString("url").orEmpty()
+                    val preview = gif("sm").ifBlank { gif("xs") }.ifBlank { gif("md") }
+                    val original = gif("md").ifBlank { gif("hd") }
+                    if (!isGiphyMedia(preview) || !isGiphyMedia(original)) return@mapNotNull null
+                    val slug = row.optString("slug").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    val share = Uri.Builder().scheme("https").authority("api.klipy.com")
+                        .appendPath("api").appendPath("v1").appendPath(key)
+                        .appendPath(kind).appendPath("share").appendPath(slug)
+                        .appendQueryParameter("q", query).build().toString()
+                    GiphyItem(slug, row.optString("title"), preview, original, original,
+                        null, null, share, giphyStickers)
+                }
                 mainHandler.post {
                     if (generation != giphyGeneration) return@post
                     giphyResults = if (more) giphyResults + found else found
-                    giphyOffset = offset + count
-                    giphyHasMore = count > 0 && giphyOffset < total && giphyOffset < 5000
+                    giphyOffset = page + 1
+                    giphyHasMore = data.optBoolean("has_next")
                     giphyBusy = false
                     searchMode = false
                     render()
@@ -551,7 +564,7 @@ class MemlibKeyboardService : InputMethodService() {
                     if (generation != giphyGeneration) return@post
                     giphyBusy = false
                     render()
-                    notice("GIPHY search failed: ${error.message}")
+                    notice("KLIPY search failed: ${error.message}")
                 }
             }
         }.start()
@@ -605,7 +618,7 @@ class MemlibKeyboardService : InputMethodService() {
 
     private fun queueGiphySave(item: GiphyItem, favorite: Boolean, toggle: Boolean) {
         if (!getSharedPreferences("memlib_keyboard", MODE_PRIVATE).getBoolean("allow_giphy_saves", false)) return
-        updateStatus("Saving GIPHY result…")
+        updateStatus("Saving KLIPY result…")
         trackGiphy(item.onclick)
         Thread {
             var file: File? = null
@@ -620,8 +633,9 @@ class MemlibKeyboardService : InputMethodService() {
                     val prefs = getSharedPreferences("memlib_keyboard", MODE_PRIVATE)
                     val queue = JSONArray(prefs.getString("pending_giphy_saves", "[]"))
                     require(queue.length() < 30) { "Open Memlib to finish pending saves" }
-                    queue.put(JSONObject().put("id", item.id).put("name", item.title.ifBlank { "GIPHY GIF" })
+                    queue.put(JSONObject().put("id", item.id).put("name", item.title.ifBlank { "KLIPY GIF" })
                         .put("sourcePage", item.pageUrl).put("path", savedFile.path)
+                        .put("sticker", item.sticker)
                         .put("favorite", favorite).put("toggle", toggle))
                     prefs.edit().putString("pending_giphy_saves", queue.toString()).apply()
                 }
@@ -657,7 +671,7 @@ class MemlibKeyboardService : InputMethodService() {
 
     private fun isGiphyMedia(url: String): Boolean {
         val uri = Uri.parse(url)
-        return uri.scheme == "https" && (uri.host == "giphy.com" || uri.host?.endsWith(".giphy.com") == true)
+        return uri.scheme == "https" && uri.host == "static.klipy.com"
     }
 
     private fun fetchBytes(url: String, limit: Int): ByteArray {
@@ -683,15 +697,22 @@ class MemlibKeyboardService : InputMethodService() {
 
     private fun trackGiphy(url: String?) {
         val uri = url?.let(Uri::parse) ?: return
-        if (uri.scheme != "https" || uri.host != "giphy-analytics.giphy.com") return
+        if (uri.scheme != "https" || uri.host != "api.klipy.com" ||
+            uri.pathSegments.size != 6 || uri.pathSegments[4] != "share") return
         val prefs = getSharedPreferences("memlib_keyboard", MODE_PRIVATE)
-        val customerId = prefs.getString("giphy_customer_id", null) ?: UUID.randomUUID().toString().also {
-            prefs.edit().putString("giphy_customer_id", it).apply()
+        val customerId = prefs.getString("klipy_customer_id", null) ?: UUID.randomUUID().toString().also {
+            prefs.edit().putString("klipy_customer_id", it).apply()
         }
         Thread {
             try {
-                fetchBytes(uri.buildUpon().appendQueryParameter("customer_id", customerId)
-                    .appendQueryParameter("ts", System.currentTimeMillis().toString()).build().toString(), 64 * 1024)
+                val connection = URL(uri.buildUpon().clearQuery().build().toString()).openConnection() as HttpURLConnection
+                connection.requestMethod = "POST"
+                connection.doOutput = true
+                connection.setRequestProperty("Content-Type", "application/json")
+                val body = JSONObject().put("customer_id", customerId).put("q", uri.getQueryParameter("q") ?: "")
+                connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+                connection.inputStream.close()
+                connection.disconnect()
             } catch (_: Exception) { /* Analytics must not interrupt sending a GIF. */ }
         }.start()
     }
@@ -949,7 +970,7 @@ class MemlibKeyboardService : InputMethodService() {
         setPadding(dp(3), dp(3), dp(3), dp(3))
     }
 
-    /** One option inside a [segmentGroup], e.g. Library / GIPHY. */
+    /** One option inside a [segmentGroup], e.g. Library / KLIPY. */
     private fun segment(text: String, selected: Boolean, description: String = text, action: () -> Unit) = TextView(this).apply {
         this.text = text
         contentDescription = description
