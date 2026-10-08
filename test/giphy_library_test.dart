@@ -61,6 +61,36 @@ void main() {
     },
   );
 
+  test(
+    'KLIPY GIF and sticker saves keep separate provider identities',
+    () async {
+      final library = GiphyLibrary(store, download, allowSaves: true);
+      const gif = GiphyResult(
+        id: 'wave',
+        title: 'Wave',
+        previewUrl: 'https://static.klipy.com/preview.gif',
+        gifUrl: 'https://static.klipy.com/full.gif',
+        pageUrl: 'https://static.klipy.com/full.gif',
+      );
+      const sticker = GiphyResult(
+        id: 'wave',
+        title: 'Wave sticker',
+        previewUrl: 'https://static.klipy.com/sticker-preview.gif',
+        gifUrl: 'https://static.klipy.com/sticker.gif',
+        pageUrl: 'https://static.klipy.com/sticker.gif',
+        stickers: true,
+      );
+      final savedGif = await library.save(gif);
+      final savedSticker = await library.save(sticker);
+      expect(savedGif.sourceType, 'klipy');
+      expect(savedGif.sourceId, 'gif:wave');
+      expect(savedSticker.sourceId, 'sticker:wave');
+      expect(savedSticker.kind, 'sticker');
+      expect(store.items, hasLength(2));
+      expect(await store.fileFor(savedGif).readAsBytes(), 'GIF89a'.codeUnits);
+    },
+  );
+
   test('saving is blocked until GIPHY permission flag is enabled', () async {
     final library = GiphyLibrary(store, download, allowSaves: false);
     await expectLater(library.save(result), throwsStateError);

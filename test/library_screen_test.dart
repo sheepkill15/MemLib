@@ -48,6 +48,7 @@ class _MemoryStore extends LibraryStore {
     Uint8List bytes, {
     required String name,
     required String extension,
+    String? kind,
     String? folderId,
     String? sourceType,
     String? sourceId,
@@ -59,7 +60,7 @@ class _MemoryStore extends LibraryStore {
       id: 'saved-${sourceId ?? items.length}',
       name: name,
       filename: 'sample.$extension',
-      kind: 'gif',
+      kind: kind ?? 'gif',
       folderId: folderId,
       sourceType: sourceType ?? 'upload',
       sourceId: sourceId,
@@ -122,6 +123,12 @@ class _MemoryStore extends LibraryStore {
   @override
   Future<void> deleteItems(Iterable<LibraryItem> selected) async {
     items.removeWhere(selected.toSet().contains);
+    notifyListeners();
+  }
+
+  @override
+  Future<void> deleteItem(LibraryItem item) async {
+    items.remove(item);
     notifyListeners();
   }
 }
@@ -713,10 +720,10 @@ void main() {
       expect(find.text('Paste'), findsOneWidget);
       expect(find.text('Esc'), findsOneWidget);
       expect(find.byType(AppBar), findsNothing);
-      await tester.tap(find.text('GIPHY'));
+      await tester.tap(find.text('KLIPY'));
       await tester.pumpAndSettle();
-      expect(find.text('Search GIPHY'), findsOneWidget);
-      expect(find.text('Add a GIPHY API key to search'), findsOneWidget);
+      expect(find.text('Search KLIPY'), findsOneWidget);
+      expect(find.text('Add a KLIPY API key to search'), findsOneWidget);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
       expect(find.byType(AppBar), findsOneWidget);
@@ -804,7 +811,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.bolt));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('GIPHY'));
+    await tester.tap(find.text('KLIPY'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).last, 'wave');
     await tester.tap(find.text('Search'));
@@ -860,7 +867,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.bolt));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('GIPHY'));
+    await tester.tap(find.text('KLIPY'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).last, 'wave');
     await tester.tap(find.text('Search'));
@@ -889,7 +896,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
-    await tester.tap(find.text('GIPHY'));
+    await tester.tap(find.text('KLIPY'));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;
@@ -969,4 +976,274 @@ void main() {
     expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;
   });
+
+  testWidgets(
+    'folder header stays compact and Android back follows folder history',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      tester.view.physicalSize = const Size(400, 760);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final store = _MemoryStore();
+      store.folders.addAll([
+        LibraryFolder(id: 'parent', name: 'Reactions'),
+        LibraryFolder(id: 'child', name: 'Animals', parentId: 'parent'),
+      ]);
+      await tester.pumpWidget(MemlibApp(store: store, enableTray: false));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('folder-card-parent')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('folder-card-child')));
+      await tester.pumpAndSettle();
+      expect(find.text('Animals'), findsWidgets);
+      expect(find.text('Library'), findsWidgets);
+      expect(find.byTooltip('Up one folder'), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('folder-card-child')), findsOneWidget);
+      expect(find.byTooltip('Up one folder'), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('folder-card-parent')), findsOneWidget);
+      expect(find.byTooltip('Up one folder'), findsNothing);
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
+
+  testWidgets('Windows mouse back and forward follow folder history', (
+    tester,
+  ) async {
+    final store = _MemoryStore();
+    store.folders.addAll([
+      LibraryFolder(id: 'parent', name: 'Reactions'),
+      LibraryFolder(id: 'child', name: 'Animals', parentId: 'parent'),
+    ]);
+    await tester.pumpWidget(MemlibApp(store: store, enableTray: false));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('folder-card-parent')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('folder-card-child')));
+    await tester.pumpAndSettle();
+    final position = tester.getCenter(find.byType(Scaffold).first);
+    await tester.sendEventToBinding(
+      PointerDownEvent(
+        pointer: 42,
+        kind: PointerDeviceKind.mouse,
+        position: position,
+        buttons: kBackMouseButton,
+      ),
+    );
+    await tester.sendEventToBinding(
+      PointerUpEvent(
+        pointer: 42,
+        kind: PointerDeviceKind.mouse,
+        position: position,
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('folder-card-child')), findsOneWidget);
+    await tester.sendEventToBinding(
+      PointerDownEvent(
+        pointer: 43,
+        kind: PointerDeviceKind.mouse,
+        position: position,
+        buttons: kForwardMouseButton,
+      ),
+    );
+    await tester.sendEventToBinding(
+      PointerUpEvent(
+        pointer: 43,
+        kind: PointerDeviceKind.mouse,
+        position: position,
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Animals'), findsWidgets);
+  }, skip: !Platform.isWindows);
+
+  testWidgets('empty search offers reset and tag filters are removable', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final store = _MemoryStore();
+    final media = Directory.systemTemp.createTempSync('memlib-ux-filters-');
+    store.media = media;
+    addTearDown(() => media.deleteSync(recursive: true));
+    File('${media.path}${Platform.pathSeparator}sample.png').writeAsBytesSync(
+      base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9hQ4sAAAAASUVORK5CYII=',
+      ),
+    );
+    store.items.addAll([
+      LibraryItem(
+        id: 'cat',
+        name: 'Cat',
+        filename: 'sample.png',
+        kind: 'sticker',
+        tags: ['Funny'],
+      ),
+      LibraryItem(
+        id: 'dog',
+        name: 'Dog',
+        filename: 'sample.png',
+        kind: 'sticker',
+      ),
+    ]);
+    await tester.pumpWidget(MemlibApp(store: store, enableTray: false));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Search names and tags'),
+      'no-match',
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('No matches'), findsOneWidget);
+    await tester.tap(find.text('Clear filters'));
+    await tester.pumpAndSettle();
+    expect(find.text('Cat'), findsOneWidget);
+    expect(find.text('Dog'), findsOneWidget);
+
+    await tester.tap(find.text('Tags'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Funny'));
+    await tester.tap(find.text('Apply'));
+    await tester.pumpAndSettle();
+    expect(find.text('Cat'), findsOneWidget);
+    expect(find.text('Dog'), findsNothing);
+    final chip = tester.widget<InputChip>(find.byType(InputChip));
+    expect(chip.onDeleted, isNotNull);
+    chip.onDeleted!();
+    await tester.pumpAndSettle();
+    expect(find.byType(InputChip), findsNothing);
+    expect(find.text('Dog'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  }, skip: !Platform.isWindows);
+
+  testWidgets('single-item deletion can be cancelled or confirmed', (
+    tester,
+  ) async {
+    final store = _MemoryStore();
+    final media = Directory.systemTemp.createTempSync('memlib-ux-delete-');
+    store.media = media;
+    addTearDown(() => media.deleteSync(recursive: true));
+    File('${media.path}${Platform.pathSeparator}sample.png').writeAsBytesSync(
+      base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9hQ4sAAAAASUVORK5CYII=',
+      ),
+    );
+    store.items.add(
+      LibraryItem(
+        id: 'cat',
+        name: 'Cat',
+        filename: 'sample.png',
+        kind: 'sticker',
+      ),
+    );
+    await tester.pumpWidget(MemlibApp(store: store, enableTray: false));
+    await tester.pumpAndSettle();
+
+    Future<void> openDelete() async {
+      await tester.tap(find.byTooltip('Item options'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Delete'));
+      await tester.pumpAndSettle();
+    }
+
+    await openDelete();
+    expect(find.text('Delete Cat?'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(store.items.length, 1);
+
+    await openDelete();
+    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+    await tester.pumpAndSettle();
+    expect(store.items, isEmpty);
+    expect(tester.takeException(), isNull);
+  }, skip: !Platform.isWindows);
+
+  testWidgets('desktop toolbar keeps search inline without cramped fallbacks', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1050, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final store = _MemoryStore();
+    final media = Directory.systemTemp.createTempSync('memlib-density-');
+    store.media = media;
+    addTearDown(() => media.deleteSync(recursive: true));
+    File('${media.path}${Platform.pathSeparator}sample.png').writeAsBytesSync(
+      base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9hQ4sAAAAASUVORK5CYII=',
+      ),
+    );
+    store.items.add(
+      LibraryItem(
+        id: 'test',
+        name: 'Test sticker',
+        filename: 'sample.png',
+        kind: 'sticker',
+      ),
+    );
+    await tester.pumpWidget(MemlibApp(store: store, enableTray: false));
+    await tester.pumpAndSettle();
+
+    final searchFinder = find.widgetWithText(
+      TextField,
+      'Search names and tags',
+    );
+    final desktopTitle = tester.getRect(find.text('Your library'));
+    final desktopSearch = tester.getRect(searchFinder);
+    expect(
+      (desktopSearch.center.dy - desktopTitle.center.dy).abs(),
+      lessThan(24),
+    );
+    expect(tester.getRect(find.byType(GridView).first).top, lessThan(155));
+    expect(tester.takeException(), isNull);
+
+    // The title and search split into separate rows when space is limited.
+    tester.view.physicalSize = const Size(840, 600);
+    await tester.pumpAndSettle();
+    final narrowTitle = tester.getRect(find.text('Your library'));
+    final narrowSearch = tester.getRect(searchFinder);
+    expect(narrowSearch.top, greaterThan(narrowTitle.bottom));
+    expect(tester.takeException(), isNull);
+  }, skip: !Platform.isWindows);
+
+  testWidgets('quick picker reserves its height for content', (tester) async {
+    tester.view.physicalSize = const Size(620, 540);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final store = _MemoryStore();
+    final media = Directory.systemTemp.createTempSync('memlib-picker-density-');
+    store.media = media;
+    addTearDown(() => media.deleteSync(recursive: true));
+    File('${media.path}${Platform.pathSeparator}sample.png').writeAsBytesSync(
+      base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9hQ4sAAAAASUVORK5CYII=',
+      ),
+    );
+    store.items.add(
+      LibraryItem(
+        id: 'test',
+        name: 'Test sticker',
+        filename: 'sample.png',
+        kind: 'sticker',
+      ),
+    );
+    await tester.pumpWidget(MemlibApp(store: store, enableTray: false));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.byIcon(Icons.bolt));
+    await tester.pumpAndSettle();
+    expect(find.byType(AppBar), findsNothing);
+    expect(tester.getRect(find.byType(GridView).first).top, lessThan(165));
+  }, skip: !Platform.isWindows);
 }

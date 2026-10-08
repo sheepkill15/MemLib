@@ -25,9 +25,20 @@ Tokens live in [`lib/theme.dart`](../lib/theme.dart) (`MemlibColors`, `MemlibRad
 ## Shape and spacing
 
 - Radii: 8 for small controls, 10 for buttons and inputs, 14 for media tiles, 18 for dialogs.
-- The library grid uses 20 px outer padding, 12 px gaps, tiles up to 168 px wide, and a 0.8 aspect ratio. The name and tags sit under the tile, not inside it.
+- The library grid uses 16 px outer padding, 12 px gaps, tiles up to 168 px wide, and a 0.86 aspect ratio. The name and tags sit under the tile, not inside it.
 - The quick picker uses 12 px padding, 8 px gaps and four square columns, with the name inside the tile.
 - If you change grid constants (`_gridPad`, `_gridGap`, `_gridExtent`, `_gridAspect`, `_pickerPad`, `_pickerGap`), check `_selectItemAt` and `_scrollPickerSelectionIntoView`. Both compute from these values.
+
+## Vertical space: compact, not cramped
+
+Vertical screen space is the scarce resource, especially with the Android keyboard or a small desktop window. Prioritize **fewer stacked toolbars** over shrinking every hit target.
+
+- At desktop widths of 1040 px and above, title, result count and search/tag controls share one row. Below that, they stack to keep both the title and search usable.
+- Keep an 8–12 px rhythm between controls, and 12 px between grid tiles. Remove redundant *rows* and oversized top/bottom gutters before reducing media whitespace.
+- The app bar is 52 px; Android bottom navigation is 60 px. Search and primary actions remain approximately 40 px tall.
+- Never compact the selection bar, folder actions or tooltips so far that their hit targets overlap. Hidden actions must not intercept taps.
+- Prefer short context-driven empty-state text and a single obvious recovery action. Keep supplementary help within the empty state rather than consuming another persistent strip.
+- When modifying these values, test 320 px mobile, a sub-1040 px desktop window, the default 1050 × 720 desktop window, and the 620 × 540 quick picker.
 
 ## Components
 

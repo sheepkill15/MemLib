@@ -12,6 +12,30 @@ class ShortcutSettings {
     modifiers: [HotKeyModifier.control, HotKeyModifier.alt],
   );
 
+  /// Do not use HotKey.debugName for user-facing text: Flutter strips
+  /// PhysicalKeyboardKey.debugName in release builds (it becomes null).
+  static String displayLabel(HotKey hotKey) {
+    const modifierLabels = <HotKeyModifier, String>{
+      HotKeyModifier.control: 'Ctrl',
+      HotKeyModifier.alt: 'Alt',
+      HotKeyModifier.shift: 'Shift',
+      HotKeyModifier.meta: 'Win',
+      HotKeyModifier.capsLock: 'Caps Lock',
+      HotKeyModifier.fn: 'Fn',
+    };
+    final selectedModifiers = hotKey.modifiers ?? const <HotKeyModifier>[];
+    final key = hotKey.physicalKey;
+    var keyLabel = key.keyLabel.trim();
+    if (keyLabel.isEmpty || keyLabel == 'null' || keyLabel == 'Unknown') {
+      keyLabel = 'Key 0x${key.usbHidUsage.toRadixString(16).toUpperCase()}';
+    }
+    return [
+      for (final modifier in modifierLabels.keys)
+        if (selectedModifiers.contains(modifier)) modifierLabels[modifier]!,
+      keyLabel,
+    ].join(' + ');
+  }
+
   static bool isUsable(HotKey hotKey) {
     final modifiers = hotKey.modifiers ?? [];
     if (!modifiers.any(

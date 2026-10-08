@@ -18,6 +18,9 @@ class GiphyResult {
     this.onloadUrl,
     this.onclickUrl,
     this.onsentUrl,
+    this.slug,
+    this.stickers = false,
+    this.searchQuery,
   });
   final String id;
   final String title;
@@ -27,6 +30,9 @@ class GiphyResult {
   final String? onloadUrl;
   final String? onclickUrl;
   final String? onsentUrl;
+  final String? slug;
+  final bool stickers;
+  final String? searchQuery;
 }
 
 class GiphyPage {
