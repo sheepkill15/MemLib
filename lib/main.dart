@@ -247,7 +247,14 @@ class _LibraryScreenState extends State<LibraryScreen>
                 if (mounted && !picker) unawaited(_togglePicker());
               },
               exitApp: () {
-                if (mounted) unawaited(windowManager.destroy());
+                // Runs after the menu callback returns, so the menu item is
+                // not disposed while it is still handling the click. The icon
+                // is removed first so it does not linger in the tray.
+                Timer.run(() {
+                  windowsTray?.dispose();
+                  windowsTray = null;
+                  unawaited(windowManager.destroy());
+                });
               },
               shortcutLabel: ShortcutSettings.displayLabel(hotkey),
             );
