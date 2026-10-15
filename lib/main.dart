@@ -1,13 +1,13 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
+import 'package:http/http.dart' as http;
 import 'package:launch_at_startup/launch_at_startup.dart';
 import 'package:pasteboard/pasteboard.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -21,6 +21,7 @@ import 'android_bridge.dart';
 import 'account_dialog.dart';
 import 'cloud_controller.dart';
 import 'library_store.dart';
+import 'link_import.dart';
 import 'media_actions.dart';
 import 'picker_navigation.dart';
 import 'release_updater.dart';
@@ -221,6 +222,7 @@ class _LibraryScreenState extends State<LibraryScreen>
       if (widget.enableTray) unawaited(_loadStartupSetting());
       windowManager.addListener(this);
       HardwareKeyboard.instance.addHandler(_handlePickerKey);
+      _dropChannel.setMethodCallHandler(_handleDrop);
       hotkey = widget.initialShortcut ?? ShortcutSettings.defaultShortcut();
       hotKeyManager
           .register(
@@ -338,6 +340,7 @@ class _LibraryScreenState extends State<LibraryScreen>
       hotKeyManager.unregister(hotkey);
       windowsTray?.dispose();
       HardwareKeyboard.instance.removeHandler(_handlePickerKey);
+      _dropChannel.setMethodCallHandler(null);
       windowManager.removeListener(this);
     }
     widget.store.removeListener(_refresh);
@@ -543,7 +546,9 @@ class _LibraryScreenState extends State<LibraryScreen>
         HardwareKeyboard.instance.isControlPressed &&
         !HardwareKeyboard.instance.isAltPressed &&
         ModalRoute.of(context)?.isCurrent == true &&
-        IsClipboardFormatAvailable(CF_HDROP) != 0) {
+        (IsClipboardFormatAvailable(CF_HDROP) != 0 ||
+            (IsClipboardFormatAvailable(CF_UNICODETEXT) != 0 &&
+                !_editingText))) {
       unawaited(_importClipboardFiles());
       return true;
     }
@@ -899,22 +904,27 @@ class _LibraryScreenState extends State<LibraryScreen>
     }
   }
 
+  /// Imports local files and http(s)/data: links to images or ZIP archives.
   Future<bool> _importPaths(List<String> paths) async {
     if (paths.isEmpty) return false;
+    final links = paths.where(isRemoteSource).toList();
     final supported = paths
         .where(
-          (path) => RegExp(
-            r'\.(png|gif|jpe?g|webp|zip)$',
-            caseSensitive: false,
-          ).hasMatch(path),
+          (path) =>
+              !isRemoteSource(path) &&
+              RegExp(
+                r'\.(png|gif|jpe?g|webp|zip)$',
+                caseSensitive: false,
+              ).hasMatch(path),
         )
         .toList();
-    if (supported.isEmpty) {
+    if (supported.isEmpty && links.isEmpty) {
       _showError('Choose PNG, GIF, JPEG, WebP, or ZIP files.');
       return false;
     }
     try {
       final before = widget.store.items.length;
+      if (links.isNotEmpty) await _importLinks(links);
       final images = supported
           .where((path) => !path.toLowerCase().endsWith('.zip'))
           .toList();
@@ -1912,12 +1922,66 @@ class _LibraryScreenState extends State<LibraryScreen>
     onChanged: _switchMainTab,
   );
 
+  Future<void> _importLinks(List<String> links) async {
+    final client = http.Client();
+    try {
+      for (final link in links) {
+        final media = await fetchLinkedMedia(client, link);
+        if (media.extension == 'zip') {
+          await widget.store.importZipBytes(
+            media.bytes,
+            folderId: selectedFolder,
+          );
+        } else {
+          await widget.store.importBytes(
+            media.bytes,
+            name: media.name,
+            extension: media.extension,
+            folderId: selectedFolder,
+          );
+        }
+      }
+    } finally {
+      client.close();
+    }
+  }
+
+  bool get _editingText =>
+      FocusManager.instance.primaryFocus?.context
+          ?.findAncestorWidgetOfExactType<EditableText>() !=
+      null;
+
+  static const _dropChannel = MethodChannel('memlib/drop');
+
+  Future<void> _handleDrop(MethodCall call) async {
+    if (!mounted) return;
+    if (call.method == 'entered') {
+      if (!picker) setState(() => draggingFiles = true);
+    } else if (call.method == 'exited') {
+      setState(() => draggingFiles = false);
+    } else if (call.method == 'dropped') {
+      setState(() => draggingFiles = false);
+      if (picker) return;
+      final dropped = (call.arguments as List).cast<String>();
+      final sources = parseLinkedSources(dropped.join('\n'));
+      if (sources.isEmpty) {
+        _showError('Drop image files or links to images.');
+        return;
+      }
+      await _importPaths(sources);
+    }
+  }
+
   Future<void> _importClipboardFiles() async {
     try {
-      final paths = await Pasteboard.files();
+      var paths = await Pasteboard.files();
+      if (paths.isEmpty) {
+        final text = await Clipboard.getData(Clipboard.kTextPlain);
+        paths = parseLinkedSources(text?.text ?? '');
+      }
       if (!mounted) return;
       if (paths.isEmpty) {
-        _showError('No files found on the clipboard.');
+        _showError('No files or links found on the clipboard.');
         return;
       }
       await _importPaths(paths);
@@ -2295,7 +2359,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                 ),
                 const SizedBox(height: 18),
                 const Text(
-                  'Drop images to import',
+                  'Drop images or links to import',
                   style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 6),
@@ -2416,21 +2480,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                   ),
                 ),
           body: Platform.isWindows && !picker
-              ? DropTarget(
-                  onDragEntered: (_) => setState(() => draggingFiles = true),
-                  onDragExited: (_) => setState(() => draggingFiles = false),
-                  onDragDone: (details) {
-                    setState(() => draggingFiles = false);
-                    unawaited(
-                      _importPaths(
-                        details.files.map((file) => file.path).toList(),
-                      ),
-                    );
-                  },
-                  child: Stack(
-                    children: [content, if (draggingFiles) _dropOverlay()],
-                  ),
-                )
+              ? Stack(children: [content, if (draggingFiles) _dropOverlay()])
               : content,
         ),
       ),
@@ -3142,7 +3192,7 @@ class _LibraryScreenState extends State<LibraryScreen>
               const Padding(
                 padding: EdgeInsets.only(top: 14),
                 child: Text(
-                  'Drop images here, or copy image files in Explorer and press Ctrl+V',
+                  'Drop images or links here, or copy them and press Ctrl+V',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: MemlibColors.textFaint, fontSize: 12),
                 ),

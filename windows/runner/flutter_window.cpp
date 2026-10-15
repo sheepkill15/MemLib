@@ -2,6 +2,7 @@
 
 #include <optional>
 
+#include "drop_target.h"
 #include "flutter/generated_plugin_registrant.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project, bool start_hidden)
@@ -26,6 +27,8 @@ bool FlutterWindow::OnCreate() {
   }
   RegisterPlugins(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
+  drop_target_ = new DropTarget(flutter_controller_->engine()->messenger(),
+                                flutter_controller_->view()->GetNativeWindow());
 
   if (!start_hidden_) {
     flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -42,6 +45,11 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  if (drop_target_) {
+    drop_target_->Revoke();
+    drop_target_->Release();
+    drop_target_ = nullptr;
+  }
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }

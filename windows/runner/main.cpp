@@ -54,9 +54,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     CreateAndAttachConsole();
   }
 
-  // Initialize COM, so that it is available for use in the library and/or
-  // plugins.
-  ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  // Initialize COM and OLE, so that it is available for use in the library
+  // and/or plugins, and so the window can accept drag and drop.
+  ::OleInitialize(nullptr);
 
   flutter::DartProject project(L"data");
 
@@ -82,6 +82,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     ::DispatchMessage(&msg);
   }
 
-  ::CoUninitialize();
+  ::OleUninitialize();
   return EXIT_SUCCESS;
 }
