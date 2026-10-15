@@ -248,13 +248,8 @@ class _LibraryScreenState extends State<LibraryScreen>
               },
               exitApp: () {
                 // Runs after the menu callback returns, so the menu item is
-                // not disposed while it is still handling the click. The icon
-                // is removed first so it does not linger in the tray.
-                Timer.run(() {
-                  windowsTray?.dispose();
-                  windowsTray = null;
-                  unawaited(windowManager.destroy());
-                });
+                // not disposed while it is still handling the click.
+                Timer.run(() => unawaited(_quitApp()));
               },
               shortcutLabel: ShortcutSettings.displayLabel(hotkey),
             );
@@ -276,6 +271,17 @@ class _LibraryScreenState extends State<LibraryScreen>
         });
       }
     }
+  }
+
+  /// Removes the tray icon and closes the window normally, so Flutter shuts
+  /// down while the message loop is still running. Both exit(0) and
+  /// windowManager.destroy() (which only posts WM_QUIT) tear the engine down
+  /// after the loop has stopped and crash on Windows.
+  Future<void> _quitApp() async {
+    windowsTray?.dispose();
+    windowsTray = null;
+    await windowManager.setPreventClose(false);
+    await windowManager.close();
   }
 
   @override
@@ -2100,6 +2106,7 @@ class _LibraryScreenState extends State<LibraryScreen>
       final file = await ReleaseUpdater.download(release, asset);
       if (Platform.isWindows) {
         await ReleaseUpdater.installWindows(file);
+        await _quitApp();
         return;
       }
       final launched = await AndroidBridge.installApk(file);
