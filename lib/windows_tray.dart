@@ -21,6 +21,9 @@ class WindowsTray {
     updateShortcutLabel(shortcutLabel);
     icon.addListener((event) {
       if (event is tray.TrayIconClickedEvent || event is tray.TrayIconDoubleClickedEvent) openLibrary();
+      // Opened explicitly so a right-click always shows the menu, whatever the
+      // native default trigger is.
+      if (event is tray.TrayIconRightClickedEvent) icon.openContextMenu();
     });
 
     void addAction(String label, void Function() callback) {
@@ -36,6 +39,7 @@ class WindowsTray {
     menu.addSeparator();
     addAction('Exit Memlib', exitApp);
     icon.setContextMenu(menu);
+    icon.setContextMenuTrigger(tray.ContextMenuTrigger.none);
     if (icon.setVisible(true)) return true;
     dispose();
     return false;
