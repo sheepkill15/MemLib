@@ -121,6 +121,37 @@ class _MemoryStore extends LibraryStore {
   }
 
   @override
+  Future<List<LibraryItem>> addLinkedItems(
+    Iterable<MediaLink> media, {
+    String? folderId,
+  }) async {
+    final saved = <LibraryItem>[];
+    for (final link in media) {
+      var item = itemBySource(link.sourceType, link.sourceId);
+      if (item == null) {
+        item = LibraryItem(
+          id: 'link-${link.sourceId}',
+          name: link.name,
+          kind: link.kind,
+          folderId: folderId,
+          favorite: link.favorite,
+          sourceType: link.sourceType,
+          sourceId: link.sourceId,
+          sourcePage: link.sourcePage,
+          mediaUrl: link.mediaUrl,
+          previewUrl: link.previewUrl,
+        );
+        items.add(item);
+      } else if (link.favorite) {
+        item.favorite = true;
+      }
+      saved.add(item);
+    }
+    notifyListeners();
+    return saved;
+  }
+
+  @override
   Future<void> deleteItems(Iterable<LibraryItem> selected) async {
     items.removeWhere(selected.toSet().contains);
     notifyListeners();
@@ -419,6 +450,104 @@ void main() {
     expect(find.byTooltip('Clear selection'), findsOneWidget);
     expect(tester.takeException(), isNull);
   }, skip: !Platform.isWindows);
+
+  testWidgets('selected KLIPY results are dragged into a folder as links', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final store = _MemoryStore();
+    store.folders.add(LibraryFolder(id: 'destination', name: 'Destination'));
+    final service = GiphyService(
+      apiKey: 'test-key',
+      client: MockClient(
+        (request) async => http.Response(
+          jsonEncode({
+            'data': [
+              for (var i = 0; i < 3; i++)
+                {
+                  'id': 'gif$i',
+                  'title': 'Wave $i',
+                  'images': {
+                    'fixed_width_small': {
+                      'url': 'https://example.test/preview$i.gif',
+                    },
+                    'original': {'url': 'https://example.test/full$i.gif'},
+                  },
+                },
+            ],
+            'pagination': {'count': 3, 'total_count': 3},
+          }),
+          200,
+        ),
+      ),
+    );
+    await tester.pumpWidget(
+      MemlibApp(store: store, enableTray: false, giphyService: service),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('KLIPY'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).last, 'wave');
+    await tester.tap(find.text('Search'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('select-link-giphy-gif0')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('select-link-giphy-gif2')));
+    await tester.pumpAndSettle();
+    expect(find.text('2 selected'), findsOneWidget);
+
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.text('Wave 0')),
+      kind: PointerDeviceKind.mouse,
+    );
+    await gesture.moveBy(const Offset(-30, 0));
+    await tester.pump();
+    expect(find.text('2 items'), findsWidgets);
+    await gesture.moveTo(
+      tester.getCenter(
+        find.byKey(const ValueKey('sidebar-folder-destination')),
+      ),
+    );
+    await tester.pump();
+    await gesture.up();
+    await tester.pumpAndSettle();
+
+    expect(store.items, hasLength(2));
+    for (final item in store.items) {
+      expect(item.isLinked, isTrue);
+      expect(item.folderId, 'destination');
+    }
+    expect(store.itemBySource('giphy', 'gif1'), isNull);
+    expect(find.text('2 selected'), findsNothing);
+    debugDefaultTargetPlatformOverride = null;
+  }, skip: !GiphyService.librarySavesEnabled);
+
+  testWidgets('opening a folder from the KLIPY tab shows the library', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final store = _MemoryStore();
+    store.folders.add(LibraryFolder(id: 'destination', name: 'Destination'));
+    await tester.pumpWidget(MemlibApp(store: store, enableTray: false));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('KLIPY'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(TextField, 'Search KLIPY'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('sidebar-folder-destination')));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(TextField, 'Search KLIPY'), findsNothing);
+    expect(find.text('Destination'), findsWidgets);
+  });
 
   testWidgets('dragging a selected item moves the whole selection', (
     tester,

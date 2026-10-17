@@ -24,7 +24,9 @@ class RemoteItem {
   const RemoteItem(this.item, this.version, this.storagePath);
   final LibraryItem item;
   final String version;
-  final String storagePath;
+
+  /// Null for linked items, whose media stays with the provider.
+  final String? storagePath;
 }
 
 abstract class RemoteLibrary {
@@ -37,10 +39,12 @@ abstract class RemoteLibrary {
     String version,
   );
   Future<bool> deleteFolder(String ownerId, String id, String version);
+
+  /// Creates the item row. [storagePath] is null for linked items.
   Future<String> createItem(
     String ownerId,
     LibraryItem item,
-    String storagePath,
+    String? storagePath,
   );
   Future<String?> updateItem(String ownerId, LibraryItem item, String version);
   Future<bool> deleteItem(String ownerId, String id, String version);
@@ -87,38 +91,76 @@ class SupabaseRemoteLibrary implements RemoteLibrary {
 
   @override
   Future<List<RemoteItem>> fetchItems(String ownerId) async =>
-      (await _fetchAll(
-        'library_items',
-        ownerId,
-      )).where((row) => row['source'] == 'upload').map((row) {
-        final path = row['storage_path'] as String;
-        final id = row['id'] as String;
-        if (!path.startsWith('$ownerId/') ||
-            !RegExp(
-              '^$id\\.(png|gif|jpe?g|webp)\$',
-              caseSensitive: false,
-            ).hasMatch(path.split('/').last)) {
-          throw FormatException('Invalid media path for item $id');
-        }
-        return RemoteItem(
-          LibraryItem(
-            id: id,
-            name: row['title'] as String,
-            filename: path.split('/').last,
-            kind: row['kind'] as String,
-            folderId: row['folder_id'] as String?,
-            favorite: row['favorite'] as bool? ?? false,
-            tags: (row['tags'] as List<dynamic>? ?? []).cast<String>(),
-            useCount: row['use_count'] as int? ?? 0,
-            sourceType: row['source_type'] as String? ?? 'upload',
-            sourceId: row['source_id'] as String?,
-            sourcePage: row['source_page'] as String?,
-            licenseLabel: row['license_label'] as String?,
-          ),
-          row['updated_at'] as String,
-          path,
-        );
-      }).toList();
+      (await _fetchAll('library_items', ownerId))
+          .where(
+            (row) => row['source'] == 'upload' || row['media_url'] is String,
+          )
+          .map(
+            (row) => row['source'] == 'upload'
+                ? _uploadedItem(ownerId, row)
+                : _linkedItem(row),
+          )
+          .toList();
+
+  RemoteItem _linkedItem(Map<String, dynamic> row) {
+    final id = row['id'] as String;
+    final mediaUrl = row['media_url'] as String;
+    final previewUrl = row['preview_url'] as String?;
+    for (final url in [mediaUrl, previewUrl]) {
+      if (url != null && Uri.tryParse(url)?.scheme != 'https') {
+        throw FormatException('Invalid media link for item $id');
+      }
+    }
+    return RemoteItem(
+      LibraryItem(
+        id: id,
+        name: row['title'] as String,
+        kind: row['kind'] as String,
+        folderId: row['folder_id'] as String?,
+        favorite: row['favorite'] as bool? ?? false,
+        tags: (row['tags'] as List<dynamic>? ?? []).cast<String>(),
+        useCount: row['use_count'] as int? ?? 0,
+        sourceType: row['source_type'] as String,
+        sourceId: row['source_id'] as String,
+        sourcePage: row['source_page'] as String?,
+        licenseLabel: row['license_label'] as String?,
+        mediaUrl: mediaUrl,
+        previewUrl: previewUrl,
+      ),
+      row['updated_at'] as String,
+      null,
+    );
+  }
+
+  RemoteItem _uploadedItem(String ownerId, Map<String, dynamic> row) {
+    final path = row['storage_path'] as String;
+    final id = row['id'] as String;
+    if (!path.startsWith('$ownerId/') ||
+        !RegExp(
+          '^$id\\.(png|gif|jpe?g|webp)\$',
+          caseSensitive: false,
+        ).hasMatch(path.split('/').last)) {
+      throw FormatException('Invalid media path for item $id');
+    }
+    return RemoteItem(
+      LibraryItem(
+        id: id,
+        name: row['title'] as String,
+        filename: path.split('/').last,
+        kind: row['kind'] as String,
+        folderId: row['folder_id'] as String?,
+        favorite: row['favorite'] as bool? ?? false,
+        tags: (row['tags'] as List<dynamic>? ?? []).cast<String>(),
+        useCount: row['use_count'] as int? ?? 0,
+        sourceType: row['source_type'] as String? ?? 'upload',
+        sourceId: row['source_id'] as String?,
+        sourcePage: row['source_page'] as String?,
+        licenseLabel: row['license_label'] as String?,
+      ),
+      row['updated_at'] as String,
+      path,
+    );
+  }
 
   @override
   Future<String> createFolder(String ownerId, LibraryFolder folder) async {
@@ -169,7 +211,7 @@ class SupabaseRemoteLibrary implements RemoteLibrary {
   Future<String> createItem(
     String ownerId,
     LibraryItem item,
-    String storagePath,
+    String? storagePath,
   ) async {
     final row = await client
         .from('library_items')
@@ -179,8 +221,15 @@ class SupabaseRemoteLibrary implements RemoteLibrary {
           'folder_id': item.folderId,
           'title': item.name,
           'kind': item.kind,
-          'source': 'upload',
-          'storage_path': storagePath,
+          if (item.isLinked) ...{
+            'source': item.sourceType,
+            'external_id': item.sourceId,
+            'media_url': item.mediaUrl,
+            'preview_url': item.previewUrl,
+          } else ...{
+            'source': 'upload',
+            'storage_path': storagePath,
+          },
           'favorite': item.favorite,
           'tags': item.tags,
           'use_count': item.useCount,
@@ -302,7 +351,9 @@ class CloudSyncEngine {
       final expected = item.toJson();
       final version = store.itemVersions[item.id];
       String? updated;
-      if (version == null) {
+      if (version == null && item.isLinked) {
+        updated = await remote.createItem(ownerId, item, null);
+      } else if (version == null) {
         final file = store.fileFor(item);
         if (!await file.exists()) {
           throw FileSystemException('Local media is missing', file.path);
@@ -347,13 +398,15 @@ class CloudSyncEngine {
       for (final row in await remote.fetchItems(ownerId)) row.item.id: row,
     };
     for (final row in remoteItems.values) {
-      if (store.dirtyItems.contains(row.item.id) ||
+      final storagePath = row.storagePath;
+      if (storagePath == null ||
+          store.dirtyItems.contains(row.item.id) ||
           store.deletedItems.contains(row.item.id)) {
         continue;
       }
       final file = store.fileFor(row.item);
       if (await file.exists()) continue;
-      final bytes = await remote.downloadMedia(row.storagePath);
+      final bytes = await remote.downloadMedia(storagePath);
       final temp = File('${file.path}.download');
       await temp.writeAsBytes(bytes, flush: true);
       await temp.rename(file.path);

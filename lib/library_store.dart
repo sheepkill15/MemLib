@@ -30,7 +30,7 @@ class LibraryItem {
   LibraryItem({
     required this.id,
     required this.name,
-    required this.filename,
+    this.filename,
     required this.kind,
     this.folderId,
     this.favorite = false,
@@ -40,11 +40,16 @@ class LibraryItem {
     String? sourceId,
     this.sourcePage,
     this.licenseLabel,
-  }) : tags = List<String>.of(tags),
+    this.mediaUrl,
+    this.previewUrl,
+  }) : assert((filename == null) != (mediaUrl == null)),
+       tags = List<String>.of(tags),
        sourceId = sourceId ?? id;
   final String id;
   String name;
-  final String filename;
+
+  /// The local media file, for uploaded items. Null for linked items.
+  final String? filename;
   final String kind;
   String? folderId;
   bool favorite;
@@ -54,6 +59,13 @@ class LibraryItem {
   final String sourceId;
   final String? sourcePage;
   final String? licenseLabel;
+
+  /// The provider's media URL, for items saved as links (KLIPY, Pinterest).
+  /// These keep only metadata; the image is loaded from the provider.
+  final String? mediaUrl;
+  final String? previewUrl;
+
+  bool get isLinked => mediaUrl != null;
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -68,11 +80,13 @@ class LibraryItem {
     'sourceId': sourceId,
     'sourcePage': sourcePage,
     'licenseLabel': licenseLabel,
+    'mediaUrl': mediaUrl,
+    'previewUrl': previewUrl,
   };
   factory LibraryItem.fromJson(Map<String, dynamic> data) => LibraryItem(
     id: data['id'] as String,
     name: data['name'] as String,
-    filename: data['filename'] as String,
+    filename: data['filename'] as String?,
     kind: data['kind'] as String,
     folderId: data['folderId'] as String?,
     favorite: data['favorite'] as bool? ?? false,
@@ -86,6 +100,8 @@ class LibraryItem {
         _legacySourceId(data['id'] as String, data['sourcePage'] as String?),
     sourcePage: data['sourcePage'] as String?,
     licenseLabel: data['licenseLabel'] as String?,
+    mediaUrl: data['mediaUrl'] as String?,
+    previewUrl: data['previewUrl'] as String?,
   );
 
   static String _legacySourceType(String? page) =>
@@ -186,14 +202,62 @@ class LibraryStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  File fileFor(LibraryItem item) =>
-      File('${media.path}${Platform.pathSeparator}${item.filename}');
+  /// The local media file of an uploaded item. Linked items have none.
+  File fileFor(LibraryItem item) {
+    final filename = item.filename;
+    if (filename == null) {
+      throw StateError('${item.name} is a linked item without a local file');
+    }
+    return File('${media.path}${Platform.pathSeparator}$filename');
+  }
 
-  LibraryItem? itemBySource(String sourceType, String sourceId) => items
-      .where(
-        (item) => item.sourceType == sourceType && item.sourceId == sourceId,
-      )
-      .firstOrNull;
+  Future<void> _deleteMediaOf(LibraryItem item) async {
+    if (item.filename == null) return;
+    final file = fileFor(item);
+    if (await file.exists()) await file.delete();
+  }
+
+  Map<String, LibraryItem>? _bySource;
+  Map<String, LibraryItem>? _byPage;
+  int _indexedCount = -1;
+
+  /// Lookups by provider identity run for every KLIPY and Pinterest tile, so
+  /// they use an index. Identity fields are final; the index is rebuilt when
+  /// the item list changes length or the store notifies.
+  void _ensureIndex() {
+    if (_bySource != null && _indexedCount == items.length) return;
+    final bySource = <String, LibraryItem>{};
+    final byPage = <String, LibraryItem>{};
+    for (final item in items) {
+      bySource.putIfAbsent(
+        '${item.sourceType}\u0000${item.sourceId}',
+        () => item,
+      );
+      final page = item.sourcePage;
+      if (page != null) byPage.putIfAbsent(page, () => item);
+    }
+    _bySource = bySource;
+    _byPage = byPage;
+    _indexedCount = items.length;
+  }
+
+  void _invalidateIndex() => _bySource = _byPage = null;
+
+  @override
+  void notifyListeners() {
+    _invalidateIndex();
+    super.notifyListeners();
+  }
+
+  LibraryItem? itemBySource(String sourceType, String sourceId) {
+    _ensureIndex();
+    return _bySource!['$sourceType\u0000$sourceId'];
+  }
+
+  LibraryItem? itemBySourcePage(String sourcePage) {
+    _ensureIndex();
+    return _byPage![sourcePage];
+  }
 
   Future<void> _save({bool notify = true}) async {
     final index = File('${root.path}${Platform.pathSeparator}index.json');
@@ -472,8 +536,7 @@ class LibraryStore extends ChangeNotifier {
       items.remove(item);
       dirtyItems.remove(item.id);
       deletedItems.add(item.id);
-      final file = fileFor(item);
-      if (await file.exists()) await file.delete();
+      await _deleteMediaOf(item);
     }
     if (removed.isNotEmpty) await _save();
   }
@@ -489,8 +552,7 @@ class LibraryStore extends ChangeNotifier {
     items.remove(item);
     dirtyItems.remove(item.id);
     deletedItems.add(item.id);
-    final file = fileFor(item);
-    if (await file.exists()) await file.delete();
+    await _deleteMediaOf(item);
     await _save();
   }
 
@@ -538,11 +600,32 @@ class LibraryStore extends ChangeNotifier {
     }
     var copied = 0;
     for (final item in guestItems) {
+      if (item.isLinked) {
+        final copy = LibraryItem(
+          id: _uuid.v4(),
+          name: item.name,
+          kind: item.kind,
+          folderId: item.folderId == null ? null : folderIds[item.folderId],
+          favorite: item.favorite,
+          tags: item.tags,
+          useCount: item.useCount,
+          sourceType: item.sourceType,
+          sourceId: item.sourceId,
+          sourcePage: item.sourcePage,
+          licenseLabel: item.licenseLabel,
+          mediaUrl: item.mediaUrl,
+          previewUrl: item.previewUrl,
+        );
+        items.add(copy);
+        dirtyItems.add(copy.id);
+        copied++;
+        continue;
+      }
       final source = File(
         '${guestRoot.path}${Platform.pathSeparator}media${Platform.pathSeparator}${item.filename}',
       );
       if (!await source.exists()) continue;
-      final extension = item.filename.split('.').last.toLowerCase();
+      final extension = item.filename!.split('.').last.toLowerCase();
       final id = _uuid.v4();
       final filename = '$id.$extension';
       await source.copy('${media.path}${Platform.pathSeparator}$filename');
@@ -660,6 +743,74 @@ class LibraryStore extends ChangeNotifier {
     return item;
   }
 
+  /// Saves provider media as a link: only metadata is kept, and the image is
+  /// loaded from [MediaLink.mediaUrl] whenever it is shown or sent.
+  Future<LibraryItem> addLinkedItem(
+    MediaLink media, {
+    String? folderId,
+  }) async => (await addLinkedItems([media], folderId: folderId)).single;
+
+  /// Adds several links with a single index write. Media already in the
+  /// library is returned as is, after applying a requested favourite.
+  Future<List<LibraryItem>> addLinkedItems(
+    Iterable<MediaLink> media, {
+    String? folderId,
+  }) async {
+    if (folderId != null && !folders.any((folder) => folder.id == folderId)) {
+      throw ArgumentError.value(folderId, 'folderId', 'Folder does not exist');
+    }
+    final saved = <LibraryItem>[];
+    var changed = false;
+    for (final entry in media) {
+      for (final url in [entry.mediaUrl, entry.previewUrl]) {
+        if (url != null && Uri.tryParse(url)?.scheme != 'https') {
+          throw ArgumentError.value(url, 'url', 'Linked media must use HTTPS');
+        }
+      }
+      if (entry.kind != 'gif' && entry.kind != 'sticker') {
+        throw ArgumentError.value(entry.kind, 'kind');
+      }
+      if (entry.sourceType.trim().isEmpty || entry.sourceId.trim().isEmpty) {
+        throw ArgumentError('Source identity cannot be empty');
+      }
+      final existing = itemBySource(entry.sourceType, entry.sourceId);
+      if (existing != null) {
+        if (entry.favorite && !existing.favorite) {
+          existing.favorite = true;
+          dirtyItems.add(existing.id);
+          changed = true;
+        }
+        saved.add(existing);
+        continue;
+      }
+      final trimmed = entry.name.trim();
+      final item = LibraryItem(
+        id: _uuid.v4(),
+        // Synced titles are limited to 200 characters.
+        name: trimmed.isEmpty
+            ? 'Untitled'
+            : trimmed.length > 200
+            ? trimmed.substring(0, 200).trim()
+            : trimmed,
+        kind: entry.kind,
+        folderId: folderId,
+        favorite: entry.favorite,
+        sourceType: entry.sourceType,
+        sourceId: entry.sourceId,
+        sourcePage: entry.sourcePage,
+        mediaUrl: entry.mediaUrl,
+        previewUrl: entry.previewUrl,
+      );
+      items.add(item);
+      _invalidateIndex();
+      dirtyItems.add(item.id);
+      saved.add(item);
+      changed = true;
+    }
+    if (changed) await _save();
+    return saved;
+  }
+
   Future<void> resolveConflict(
     String entity,
     String id, {
@@ -722,8 +873,7 @@ class LibraryStore extends ChangeNotifier {
         .toList();
     items.removeWhere((item) => removed.contains(item));
     for (final item in removed) {
-      final file = fileFor(item);
-      if (await file.exists()) await file.delete();
+      await _deleteMediaOf(item);
       itemVersions.remove(item.id);
     }
     for (final entry in remoteItems.entries) {
@@ -732,8 +882,7 @@ class LibraryStore extends ChangeNotifier {
       }
       final old = items.where((item) => item.id == entry.key).firstOrNull;
       if (old != null && old.filename != entry.value.filename) {
-        final oldFile = fileFor(old);
-        if (await oldFile.exists()) await oldFile.delete();
+        await _deleteMediaOf(old);
       }
       items.removeWhere((item) => item.id == entry.key);
       items.add(entry.value);
@@ -741,4 +890,38 @@ class LibraryStore extends ChangeNotifier {
     }
     await _save();
   }
+}
+
+/// Provider media to keep as a link rather than a downloaded copy.
+class MediaLink {
+  const MediaLink({
+    required this.name,
+    required this.kind,
+    required this.mediaUrl,
+    required this.sourceType,
+    required this.sourceId,
+    this.previewUrl,
+    this.sourcePage,
+    this.favorite = false,
+  });
+
+  final String name;
+  final String kind;
+  final String mediaUrl;
+  final String? previewUrl;
+  final String sourceType;
+  final String sourceId;
+  final String? sourcePage;
+  final bool favorite;
+
+  MediaLink asFavorite() => MediaLink(
+    name: name,
+    kind: kind,
+    mediaUrl: mediaUrl,
+    previewUrl: previewUrl,
+    sourceType: sourceType,
+    sourceId: sourceId,
+    sourcePage: sourcePage,
+    favorite: true,
+  );
 }

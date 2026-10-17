@@ -55,9 +55,9 @@ class AndroidBridge {
         .toList();
   }
 
-  static Future<void> ackGiphySave(String path) async {
+  static Future<void> ackGiphySave(String key) async {
     if (!Platform.isAndroid) return;
-    await _channel.invokeMethod<void>('ackGiphySave', {'path': path});
+    await _channel.invokeMethod<void>('ackGiphySave', {'key': key});
   }
 
   static Future<void> openKeyboardSettings() =>
