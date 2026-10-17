@@ -16,6 +16,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.util.LruCache
 import android.text.InputType
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
@@ -45,7 +46,9 @@ import java.util.concurrent.Executors
 
 /** A small native IME so the library remains available when the Flutter activity is closed. */
 class MemlibKeyboardService : InputMethodService() {
-    private data class Item(val id: String, val name: String, val filename: String, val folderId: String?, val favorite: Boolean, val uses: Int, val sourceType: String, val sourceId: String, val sourcePage: String?, val tags: List<String>)
+    /** Uploaded items have a [filename]; linked items (KLIPY, Pinterest) are loaded from [mediaUrl]. */
+    private data class Item(val id: String, val name: String, val filename: String?, val folderId: String?, val favorite: Boolean, val uses: Int, val sourceType: String, val sourceId: String, val sourcePage: String?, val tags: List<String>,
+        val mediaUrl: String?, val previewUrl: String?)
     private data class Folder(val id: String, val name: String, val parentId: String?)
     private data class GiphyItem(val id: String, val title: String, val previewUrl: String, val gifUrl: String, val pageUrl: String,
         val onload: String?, val onclick: String?, val onsent: String?, val sticker: Boolean)
@@ -93,6 +96,9 @@ class MemlibKeyboardService : InputMethodService() {
     private var giphyGeneration = 0
     private var giphyResults = emptyList<GiphyItem>()
     private val giphyPreviews = mutableMapOf<String, ByteArray>()
+    private val linkedPreviews = object : LruCache<String, ByteArray>(24 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: ByteArray) = value.size
+    }
 
     override fun onEvaluateFullscreenMode(): Boolean = false
 
@@ -143,7 +149,8 @@ class MemlibKeyboardService : InputMethodService() {
             val data = JSONObject(index.readText())
             folders = data.optJSONArray("folders").asObjects().map { Folder(it.getString("id"), it.optString("name"), it.optNullableString("parentId")) }
             items = data.optJSONArray("items").asObjects().map {
-                Item(it.getString("id"), it.optString("name"), it.getString("filename"), it.optNullableString("folderId"), it.optBoolean("favorite"), it.optInt("useCount"), it.optString("sourceType"), it.optString("sourceId"), it.optNullableString("sourcePage"), it.optJSONArray("tags").asStrings())
+                Item(it.getString("id"), it.optString("name"), it.optNullableString("filename"), it.optNullableString("folderId"), it.optBoolean("favorite"), it.optInt("useCount"), it.optString("sourceType"), it.optString("sourceId"), it.optNullableString("sourcePage"), it.optJSONArray("tags").asStrings(),
+                    it.optNullableString("mediaUrl")?.takeIf(::isHttps), it.optNullableString("previewUrl")?.takeIf(::isHttps))
             }
             if (folderId != null && folders.none { it.id == folderId }) folderId = null
             val available = items.flatMap { it.tags }.map(String::lowercase).toSet()
@@ -378,15 +385,16 @@ class MemlibKeyboardService : InputMethodService() {
         top.addView(ghostKey("←", description = "Back to library") { previewItemId = null; render() })
         top.addView(label(item.name, 15, textColor, true), LinearLayout.LayoutParams(0, dp(42), 1f))
         rootView.addView(top)
-        val file = File(File(libraryRoot, "media"), item.filename)
         val image = ImageView(this).apply {
             scaleType = ImageView.ScaleType.FIT_CENTER
             setPadding(dp(12), dp(12), dp(12), dp(12))
             background = rounded(panel, 14)
         }
-        if (file.isFile) showFullPreview(image, file)
+        val file = localFile(item)
+        if (file?.isFile == true) showFullPreview(image, file)
+        else if (item.mediaUrl != null) loadLinkedPreview(item.mediaUrl, image, 1200)
         rootView.addView(image, LinearLayout.LayoutParams(-1, 0, 1f).apply { setMargins(dp(4), dp(2), dp(4), dp(8)) })
-        rootView.addView(key("Send", selected = true) { sendFile(file, item.id) }, LinearLayout.LayoutParams(-1, dp(46)).apply {
+        rootView.addView(key("Send", selected = true) { withItemFile(item) { sendFile(it, item.id) } }, LinearLayout.LayoutParams(-1, dp(46)).apply {
             setMargins(dp(4), 0, dp(4), 0)
         })
     }
@@ -440,13 +448,14 @@ class MemlibKeyboardService : InputMethodService() {
             background = rounded(panel, 12)
             clipToOutline = true
         }
-        val file = File(File(libraryRoot, "media"), item.filename)
         val imageArea = FrameLayout(this)
         val preview = ImageView(this).apply {
             scaleType = ImageView.ScaleType.FIT_CENTER
             setPadding(dp(8), dp(8), dp(8), dp(2))
         }
-        if (file.isFile) showPreview(preview, file)
+        val file = localFile(item)
+        if (file?.isFile == true) showPreview(preview, file)
+        else (item.previewUrl ?: item.mediaUrl)?.let { loadLinkedPreview(it, preview, 250) }
         imageArea.addView(preview, FrameLayout.LayoutParams(-1, -1))
         imageArea.addView(overlayAction("⤢", "Preview ${item.name}") {
             previewItemId = item.id
@@ -454,7 +463,8 @@ class MemlibKeyboardService : InputMethodService() {
         }, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.BOTTOM or Gravity.RIGHT).apply { setMargins(0, 0, dp(5), dp(3)) })
         if (item.favorite) imageArea.addView(label("★", 15, star).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, 0) },
             FrameLayout.LayoutParams(dp(26), dp(26), Gravity.TOP or Gravity.RIGHT).apply { setMargins(0, dp(3), dp(3), 0) })
-        if (item.sourceType == "giphy" || item.sourceType == "klipy") imageArea.addView(label(if (item.sourceType == "giphy") "GIPHY" else "KLIPY", 9, textColor, true).apply {
+        val badge = when (item.sourceType) { "giphy" -> "GIPHY"; "klipy" -> "KLIPY"; "pinterest" -> "PINTEREST"; else -> null }
+        if (badge != null) imageArea.addView(label(badge, 9, textColor, true).apply {
             background = rounded(Color.argb(204, 14, 12, 19), 6)
             setPadding(dp(5), 0, dp(5), 0)
         }, FrameLayout.LayoutParams(-2, dp(18), Gravity.BOTTOM or Gravity.LEFT).apply {
@@ -464,8 +474,8 @@ class MemlibKeyboardService : InputMethodService() {
         outer.addView(label(item.name, 11, muted), LinearLayout.LayoutParams(-1, dp(22)))
         outer.contentDescription = "${item.name}. Tap to send, hold to share"
         outer.isHapticFeedbackEnabled = true
-        outer.setOnClickListener { view -> view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY); sendFile(file, item.id) }
-        outer.setOnLongClickListener { shareFile(file); true }
+        outer.setOnClickListener { view -> view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY); withItemFile(item) { sendFile(it, item.id) } }
+        outer.setOnLongClickListener { withItemFile(item, ::shareFile); true }
         val holder = LinearLayout(this).apply { setPadding(dp(3), dp(3), dp(3), dp(3)); addView(outer, LinearLayout.LayoutParams(-1, -1)) }
         return holder
     }
@@ -584,11 +594,11 @@ class MemlibKeyboardService : InputMethodService() {
         }.start()
     }
 
-    private fun showRemotePreview(view: ImageView, bytes: ByteArray) {
+    private fun showRemotePreview(view: ImageView, bytes: ByteArray, maxSize: Int = 250) {
         try {
             if (Build.VERSION.SDK_INT >= 28) {
                 val drawable = ImageDecoder.decodeDrawable(ImageDecoder.createSource(ByteBuffer.wrap(bytes))) { decoder, info, _ ->
-                    decoder.setTargetSampleSize(maxOf(1, maxOf(info.size.width, info.size.height) / 250))
+                    decoder.setTargetSampleSize(maxOf(1, maxOf(info.size.width, info.size.height) / maxSize))
                 }
                 view.setImageDrawable(drawable)
                 (drawable as? AnimatedImageDrawable)?.start()
@@ -618,36 +628,72 @@ class MemlibKeyboardService : InputMethodService() {
 
     private fun queueGiphySave(item: GiphyItem, favorite: Boolean, toggle: Boolean) {
         if (!getSharedPreferences("memlib_keyboard", MODE_PRIVATE).getBoolean("allow_giphy_saves", false)) return
-        updateStatus("Saving KLIPY result…")
         trackGiphy(item.onclick)
-        Thread {
-            var file: File? = null
-            try {
-                val bytes = fetchBytes(item.gifUrl, 20 * 1024 * 1024)
-                val folder = File(filesDir, "pending-giphy")
-                folder.mkdirs()
-                val savedFile = File(folder, "${UUID.randomUUID()}.gif")
-                file = savedFile
-                savedFile.writeBytes(bytes)
-                synchronized(MemlibKeyboardService::class.java) {
-                    val prefs = getSharedPreferences("memlib_keyboard", MODE_PRIVATE)
-                    val queue = JSONArray(prefs.getString("pending_giphy_saves", "[]"))
-                    require(queue.length() < 30) { "Open Memlib to finish pending saves" }
-                    queue.put(JSONObject().put("id", item.id).put("name", item.title.ifBlank { "KLIPY GIF" })
-                        .put("sourcePage", item.pageUrl).put("path", savedFile.path)
-                        .put("sticker", item.sticker)
-                        .put("favorite", favorite).put("toggle", toggle))
-                    prefs.edit().putString("pending_giphy_saves", queue.toString()).apply()
-                }
-                mainHandler.post {
-                    render()
-                    notice(if (toggle) "Favourite queued for Memlib" else "Saved to Memlib queue")
-                }
-            } catch (error: Exception) {
-                file?.delete()
-                mainHandler.post { notice("Could not save GIF: ${error.message}") }
+        // Saves keep only the GIF's links; Memlib adds them to the library when it next opens.
+        try {
+            synchronized(MemlibKeyboardService::class.java) {
+                val prefs = getSharedPreferences("memlib_keyboard", MODE_PRIVATE)
+                val queue = JSONArray(prefs.getString("pending_giphy_saves", "[]"))
+                require(queue.length() < 100) { "Open Memlib to finish pending saves" }
+                queue.put(JSONObject().put("key", UUID.randomUUID().toString()).put("id", item.id)
+                    .put("name", item.title.ifBlank { "KLIPY GIF" }).put("sourcePage", item.pageUrl)
+                    .put("gifUrl", item.gifUrl).put("previewUrl", item.previewUrl)
+                    .put("sticker", item.sticker)
+                    .put("favorite", favorite).put("toggle", toggle))
+                prefs.edit().putString("pending_giphy_saves", queue.toString()).apply()
             }
+            render()
+            notice(if (toggle) "Favourite queued for Memlib" else "Saved to Memlib queue")
+        } catch (error: Exception) {
+            notice("Could not save GIF: ${error.message}")
+        }
+    }
+
+    private fun localFile(item: Item): File? = item.filename?.let { File(File(libraryRoot, "media"), it) }
+
+    private fun isHttps(url: String) = Uri.parse(url).scheme == "https"
+
+    private fun loadLinkedPreview(url: String, view: ImageView, maxSize: Int) {
+        linkedPreviews.get(url)?.let { showRemotePreview(view, it, maxSize); return }
+        val generation = previewGeneration
+        previewExecutor.execute {
+            val bytes = try { fetchBytes(url, 20 * 1024 * 1024) } catch (_: Exception) { null }
+            if (bytes != null) linkedPreviews.put(url, bytes)
+            mainHandler.post {
+                if (generation != previewGeneration) return@post
+                if (bytes == null) view.setImageResource(android.R.drawable.ic_menu_gallery)
+                else showRemotePreview(view, bytes, maxSize)
+            }
+        }
+    }
+
+    /** Runs [action] with the item's media file, downloading linked items to the share cache first. */
+    private fun withItemFile(item: Item, action: (File) -> Unit) {
+        localFile(item)?.let { action(it); return }
+        val url = item.mediaUrl ?: run { notice("Image is unavailable; open Memlib to sync it."); return }
+        updateStatus("Loading…")
+        Thread {
+            try {
+                val bytes = linkedPreviews.get(url) ?: fetchBytes(url, 30 * 1024 * 1024)
+                val extension = mediaExtension(bytes) ?: error("Unsupported image format")
+                cacheDir.listFiles()?.filter { it.name.startsWith("memlib-share-") && System.currentTimeMillis() - it.lastModified() > 60 * 60 * 1000 }?.forEach(File::delete)
+                val file = File(cacheDir, "memlib-share-${System.currentTimeMillis()}.$extension")
+                file.writeBytes(bytes)
+                mainHandler.post { action(file) }
+            } catch (error: Exception) { mainHandler.post { notice("Could not load image: ${error.message}") } }
         }.start()
+    }
+
+    private fun mediaExtension(bytes: ByteArray): String? {
+        fun startsWith(prefix: ByteArray, offset: Int = 0) =
+            bytes.size >= offset + prefix.size && prefix.indices.all { bytes[offset + it] == prefix[it] }
+        return when {
+            startsWith(byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47)) -> "png"
+            startsWith("GIF8".toByteArray()) -> "gif"
+            startsWith(byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte())) -> "jpg"
+            startsWith("RIFF".toByteArray()) && startsWith("WEBP".toByteArray(), 8) -> "webp"
+            else -> null
+        }
     }
 
     private fun isGiphySaveQueued(item: GiphyItem): Boolean {

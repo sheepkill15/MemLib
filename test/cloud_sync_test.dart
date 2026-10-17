@@ -59,7 +59,7 @@ class MemoryRemote implements RemoteLibrary {
   Future<String> createItem(
     String ownerId,
     LibraryItem item,
-    String storagePath,
+    String? storagePath,
   ) async {
     final version = nextVersion;
     items[item.id] = RemoteItem(copyItem(item), version, storagePath);
@@ -151,6 +151,36 @@ void main() {
     await CloudSyncEngine(first, remote, ownerId).sync();
     expect(first.items.single.favorite, isTrue);
     expect(first.items.single.tags, ['reaction']);
+  });
+
+  test('syncs linked items without uploading or downloading media', () async {
+    await first.addLinkedItem(
+      const MediaLink(
+        name: 'Pin',
+        kind: 'sticker',
+        mediaUrl: 'https://i.pinimg.com/originals/aa/pin.jpg',
+        previewUrl: 'https://i.pinimg.com/600x/aa/pin.jpg',
+        sourceType: 'pinterest',
+        sourceId: '42',
+        sourcePage: 'https://www.pinterest.com/pin/42/',
+      ),
+    );
+    await CloudSyncEngine(first, remote, ownerId).sync();
+    expect(first.dirtyItems, isEmpty);
+    expect(remote.media, isEmpty);
+    expect(remote.items.values.single.storagePath, isNull);
+
+    await CloudSyncEngine(second, remote, ownerId).sync();
+    final pulled = second.items.single;
+    expect(pulled.isLinked, isTrue);
+    expect(pulled.mediaUrl, 'https://i.pinimg.com/originals/aa/pin.jpg');
+    expect(await second.media.list().isEmpty, isTrue);
+
+    await second.deleteItem(pulled);
+    await CloudSyncEngine(second, remote, ownerId).sync();
+    await CloudSyncEngine(first, remote, ownerId).sync();
+    expect(first.items, isEmpty);
+    expect(remote.items, isEmpty);
   });
 
   test('propagates deletions without resurrecting old files', () async {

@@ -95,22 +95,26 @@ class MainActivity : FlutterActivity() {
                             val queue = JSONArray(prefs.getString("pending_giphy_saves", "[]"))
                             result.success((0 until queue.length()).map { index ->
                                 val entry = queue.getJSONObject(index)
-                                mapOf("id" to entry.getString("id"), "name" to entry.getString("name"),
-                                    "sourcePage" to entry.getString("sourcePage"), "path" to entry.getString("path"),
+                                // Entries queued by older keyboards carry a downloaded file instead of URLs.
+                                val path = entry.optString("path").ifEmpty { null }
+                                mapOf("key" to entry.optString("key").ifEmpty { path }, "id" to entry.getString("id"),
+                                    "name" to entry.getString("name"), "sourcePage" to entry.getString("sourcePage"),
+                                    "gifUrl" to entry.optString("gifUrl").ifEmpty { null },
+                                    "previewUrl" to entry.optString("previewUrl").ifEmpty { null }, "path" to path,
                                     "favorite" to entry.getBoolean("favorite"), "toggle" to entry.getBoolean("toggle"),
                                     "sticker" to entry.optBoolean("sticker"))
                             })
                         }
                     }
                     "ackGiphySave" -> {
-                        val path = call.argument<String>("path") ?: error("Missing path")
+                        val key = call.argument<String>("key") ?: error("Missing key")
                         synchronized(MemlibKeyboardService::class.java) {
                             val prefs = getSharedPreferences("memlib_keyboard", MODE_PRIVATE)
                             val queue = JSONArray(prefs.getString("pending_giphy_saves", "[]"))
                             val remaining = JSONArray()
                             for (index in 0 until queue.length()) {
                                 val entry = queue.getJSONObject(index)
-                                if (entry.getString("path") != path) remaining.put(entry)
+                                if (entry.optString("key").ifEmpty { entry.optString("path") } != key) remaining.put(entry)
                             }
                             prefs.edit().putString("pending_giphy_saves", remaining.toString()).apply()
                         }

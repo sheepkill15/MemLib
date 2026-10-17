@@ -10,6 +10,7 @@ import 'package:hotkey_manager/hotkey_manager.dart';
 import 'package:http/http.dart' as http;
 import 'package:launch_at_startup/launch_at_startup.dart';
 import 'package:pasteboard/pasteboard.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:win32/win32.dart';
 import 'package:window_manager/window_manager.dart';
@@ -22,8 +23,11 @@ import 'account_dialog.dart';
 import 'cloud_controller.dart';
 import 'library_store.dart';
 import 'link_import.dart';
+import 'link_tiles.dart';
 import 'media_actions.dart';
 import 'picker_navigation.dart';
+import 'pinterest_service.dart';
+import 'pinterest_view.dart';
 import 'release_updater.dart';
 import 'shortcut_settings.dart';
 import 'theme.dart';
@@ -132,18 +136,49 @@ class LibraryScreen extends StatefulWidget {
 }
 
 class _LibraryDrag {
-  const _LibraryDrag.items(this.itemIds) : id = '', folder = false;
-  const _LibraryDrag.folder(this.id) : itemIds = const [], folder = true;
+  const _LibraryDrag.items(this.itemIds)
+    : id = '',
+      folder = false,
+      links = const [],
+      board = null;
+  const _LibraryDrag.folder(this.id)
+    : itemIds = const [],
+      folder = true,
+      links = const [],
+      board = null;
+
+  /// A Pinterest board: dropping adds its pins in a folder named after it.
+  const _LibraryDrag.board(PinterestBoard this.board)
+    : id = '',
+      itemIds = const [],
+      folder = false,
+      links = const [];
+
+  /// KLIPY results or Pinterest pins: dropping saves them into the folder,
+  /// or moves them there when they are already in the library.
+  const _LibraryDrag.links(this.links)
+    : id = '',
+      itemIds = const [],
+      folder = false,
+      board = null;
   final String id;
   final List<String> itemIds;
   final bool folder;
+  final List<MediaLink> links;
+  final PinterestBoard? board;
 }
 
 class _LibraryScreenState extends State<LibraryScreen>
     with WindowListener, WidgetsBindingObserver {
   final actions = MediaActions();
   late final giphy = widget.giphyService ?? KlipyService();
-  late final giphyLibrary = GiphyLibrary(widget.store, giphy.fetchForShare);
+  late final giphyLibrary = GiphyLibrary(widget.store);
+  late final pinterest = PinterestService(
+    functionUrl: supabaseUrl.isEmpty
+        ? ''
+        : '$supabaseUrl/functions/v1/pinterest-oauth',
+    publishableKey: supabasePublishableKey,
+  );
   final savingGiphy = <String>{};
   final searchController = TextEditingController();
   final giphyController = TextEditingController();
@@ -176,6 +211,14 @@ class _LibraryScreenState extends State<LibraryScreen>
   bool favoritesOnly = false;
   bool picker = false;
   bool giphyTab = false;
+
+  /// The Pinterest tab exists only in the library window, not the picker.
+  bool pinterestTab = false;
+
+  /// KLIPY results and pins selected for bulk actions, keyed by provider ID.
+  final selectedLinks = <String, MediaLink>{};
+  String? linkAnchorKey;
+  late final linkHost = _LinkHost(this);
   bool stickerSearch = false;
   bool busy = false;
   bool giphyHasMore = false;
@@ -366,6 +409,7 @@ class _LibraryScreenState extends State<LibraryScreen>
     giphyPickerScroll.dispose();
     libraryGridScroll.dispose();
     giphy.dispose();
+    pinterest.dispose();
     super.dispose();
   }
 
@@ -416,33 +460,28 @@ class _LibraryScreenState extends State<LibraryScreen>
         if (item != null) await widget.store.markUsed(item);
       }
       for (final pending in await AndroidBridge.drainGiphySaves()) {
-        final file = File(pending['path'] as String);
         try {
+          final sourcePage = pending['sourcePage'] as String;
           final result = GiphyResult(
             id: pending['id'] as String,
             title: pending['name'] as String,
-            previewUrl: '',
-            gifUrl: '',
-            pageUrl: pending['sourcePage'] as String,
+            previewUrl: pending['previewUrl'] as String? ?? '',
+            // Saves queued by older keyboards only carried the page, which
+            // for KLIPY is the GIF itself.
+            gifUrl: pending['gifUrl'] as String? ?? sourcePage,
+            pageUrl: sourcePage,
             stickers: pending['sticker'] == true,
           );
-          final existing = giphyLibrary.savedItem(result);
-          if (pending['toggle'] == true && existing != null) {
+          if (pending['toggle'] == true) {
             await giphyLibrary.setFavorite(result, pending['favorite'] == true);
           } else {
-            final bytes = await file.readAsBytes();
-            if (pending['toggle'] == true) {
-              await giphyLibrary.setFavorite(
-                result,
-                pending['favorite'] == true,
-                downloadedBytes: bytes,
-              );
-            } else {
-              await giphyLibrary.save(result, downloadedBytes: bytes);
-            }
+            await giphyLibrary.save(result);
           }
-          await AndroidBridge.ackGiphySave(file.path);
-          if (await file.exists()) await file.delete();
+          await AndroidBridge.ackGiphySave(pending['key'] as String);
+          final legacyFile = pending['path'] as String?;
+          if (legacyFile != null && await File(legacyFile).exists()) {
+            await File(legacyFile).delete();
+          }
         } catch (e) {
           if (mounted) {
             _showError('Could not save a KLIPY result from the keyboard: $e');
@@ -516,14 +555,20 @@ class _LibraryScreenState extends State<LibraryScreen>
     if (event is! KeyDownEvent) return false;
     final keyboard = HardwareKeyboard.instance;
     if (!picker && !windowTransition) {
-      if (keyboard.isControlPressed &&
+      if (selectedLinks.isNotEmpty &&
+          event.logicalKey == LogicalKeyboardKey.escape) {
+        _clearLinkSelection();
+        return true;
+      }
+      if (!pinterestTab &&
+          keyboard.isControlPressed &&
           !keyboard.isAltPressed &&
           event.logicalKey == LogicalKeyboardKey.keyF) {
         (giphyTab ? giphyFocus : searchFocus).requestFocus();
         return true;
       }
       // Preserve normal editing shortcuts inside search fields.
-      if (!_isEditingText && !giphyTab) {
+      if (!_isEditingText && !giphyTab && !pinterestTab) {
         if (keyboard.isAltPressed &&
             event.logicalKey == LogicalKeyboardKey.arrowLeft) {
           _moveFolderHistory(-1);
@@ -676,6 +721,8 @@ class _LibraryScreenState extends State<LibraryScreen>
   void _switchTab(bool giphySelected) {
     setState(() {
       giphyTab = giphySelected;
+      selectedLinks.clear();
+      linkAnchorKey = null;
       selectedIndex = 0;
       giphyNavigating = false;
       selectedItemIds.clear();
@@ -1020,9 +1067,43 @@ class _LibraryScreenState extends State<LibraryScreen>
     );
   }
 
+  /// Downloads provider media and opens Android's share sheet for it.
+  Future<void> _shareUrl(String url) async {
+    if (!Platform.isAndroid) return;
+    final client = http.Client();
+    try {
+      final media = await fetchLinkedMedia(client, url);
+      final cache = await getTemporaryDirectory();
+      final file = File(
+        '${cache.path}${Platform.pathSeparator}memlib-share-${DateTime.now().microsecondsSinceEpoch}.${media.extension}',
+      );
+      await file.writeAsBytes(media.bytes, flush: true);
+      await AndroidBridge.shareFile(file);
+    } catch (e) {
+      _showError('Could not share: $e');
+    } finally {
+      client.close();
+    }
+  }
+
+  /// Downloads a linked item's media from its provider.
+  Future<LinkedMedia> _linkedBytes(LibraryItem item) async {
+    final client = http.Client();
+    try {
+      return await fetchLinkedMedia(client, item.mediaUrl!);
+    } finally {
+      client.close();
+    }
+  }
+
   Future<void> _useItem(LibraryItem item) async {
     try {
-      await actions.copyFile(widget.store.fileFor(item));
+      if (item.isLinked) {
+        final media = await _linkedBytes(item);
+        await actions.copyBytes(media.bytes, media.extension);
+      } else {
+        await actions.copyFile(widget.store.fileFor(item));
+      }
       await widget.store.markUsed(item);
       await _afterCopy();
     } catch (e) {
@@ -1060,9 +1141,9 @@ class _LibraryScreenState extends State<LibraryScreen>
               boundaryMargin: const EdgeInsets.all(80),
               child: Padding(
                 padding: const EdgeInsets.all(32),
-                child: Image.file(
-                  widget.store.fileFor(item),
-                  fit: BoxFit.contain,
+                child: _itemImage(
+                  item,
+                  full: true,
                   errorBuilder: (_, _, _) => const Icon(
                     Icons.broken_image_outlined,
                     size: 64,
@@ -1215,7 +1296,22 @@ class _LibraryScreenState extends State<LibraryScreen>
     return foldersIn(selectedFolder);
   }
 
-  void _openFolder(String? id, {bool recordHistory = true}) => setState(() {
+  /// Leaves the KLIPY or Pinterest tab, so a folder picked in the sidebar
+  /// shows its contents. Call inside setState.
+  void _showLibraryTab() {
+    if (picker || (!giphyTab && !pinterestTab)) return;
+    giphyTab = false;
+    pinterestTab = false;
+    selectedLinks.clear();
+    linkAnchorKey = null;
+  }
+
+  void _openFolder(
+    String? id, {
+    bool recordHistory = true,
+    bool showLibrary = true,
+  }) => setState(() {
+    if (recordHistory && showLibrary) _showLibraryTab();
     if (recordHistory && id != selectedFolder) {
       folderHistory.removeRange(folderHistoryIndex + 1, folderHistory.length);
       folderHistory.add(id);
@@ -1264,6 +1360,13 @@ class _LibraryScreenState extends State<LibraryScreen>
   }
 
   bool _canDrop(_LibraryDrag data, String? target) {
+    if (data.board != null) return true;
+    if (data.links.isNotEmpty) {
+      return data.links.any((link) {
+        final saved = widget.store.itemBySource(link.sourceType, link.sourceId);
+        return saved == null || saved.folderId != target;
+      });
+    }
     if (data.folder) {
       final folder = widget.store.folders
           .where((e) => e.id == data.id)
@@ -1277,7 +1380,42 @@ class _LibraryScreenState extends State<LibraryScreen>
     );
   }
 
+  /// Saves provider links into [folderId], moving any already saved there.
+  Future<void> _saveLinks(List<MediaLink> links, String? folderId) async {
+    try {
+      final saved = await widget.store.addLinkedItems(
+        links,
+        folderId: folderId,
+      );
+      await widget.store.moveItems(saved, folderId);
+      final folder = widget.store.folders
+          .where((folder) => folder.id == folderId)
+          .firstOrNull;
+      _showError('Saved to ${folder?.name ?? 'All items'}');
+    } catch (e) {
+      _showError('Could not save: $e');
+    }
+  }
+
   Future<void> _drop(_LibraryDrag data, String? target) async {
+    if (data.board != null) {
+      await _addBoard(data.board!, target);
+      if (mounted && target != null) {
+        setState(() => expandedFolders.add(target));
+      }
+      return;
+    }
+    if (data.links.isNotEmpty) {
+      await _saveLinks(data.links, target);
+      if (mounted) {
+        setState(() {
+          selectedLinks.clear();
+          linkAnchorKey = null;
+          if (target != null) expandedFolders.add(target);
+        });
+      }
+      return;
+    }
     try {
       if (data.folder) {
         final folder = widget.store.folders
@@ -1386,6 +1524,331 @@ class _LibraryScreenState extends State<LibraryScreen>
       feedback: feedback,
       childWhenDragging: Opacity(opacity: .4, child: child),
       child: child,
+    );
+  }
+
+  /// Adds a board's pins, as links, to a folder named after it in [parentId].
+  Future<void> _addBoard(PinterestBoard board, String? parentId) => importBoard(
+    pinterest,
+    widget.store,
+    board,
+    parentId: parentId,
+    onMessage: _showError,
+  );
+
+  Widget _boardWrap(PinterestBoard board, Widget child) {
+    if (Theme.of(context).platform == TargetPlatform.android) return child;
+    return Draggable<_LibraryDrag>(
+      data: _LibraryDrag.board(board),
+      feedback: _dragFeedback(board.name, Icons.dashboard_outlined),
+      childWhenDragging: Opacity(opacity: .4, child: child),
+      child: child,
+    );
+  }
+
+  /// Adds a board to the library root or inside any folder.
+  Widget _boardMenu(PinterestBoard board) => PopupMenuButton<String>(
+    tooltip: 'More options',
+    position: PopupMenuPosition.under,
+    onSelected: (target) =>
+        unawaited(_addBoard(board, target.isEmpty ? null : target)),
+    itemBuilder: (_) => <PopupMenuEntry<String>>[
+      PopupMenuItem(
+        value: '',
+        child: _menuRow(Icons.library_add_outlined, 'Add to All items'),
+      ),
+      ...widget.store.folders.map(
+        (folder) => PopupMenuItem(
+          value: folder.id,
+          child: _menuRow(Icons.folder_outlined, 'Add to ${folder.name}'),
+        ),
+      ),
+    ],
+    child: const IgnorePointer(
+      child: TileAction(
+        tooltip: 'More options',
+        icon: Icons.more_horiz,
+        onPressed: null,
+      ),
+    ),
+  );
+
+  List<GiphyResult>? _resultLinksFor;
+  List<MediaLink> _resultLinksCache = const [];
+
+  /// The KLIPY results as links, rebuilt only when the result list changes.
+  List<MediaLink> get _resultLinks {
+    if (!identical(_resultLinksFor, results)) {
+      _resultLinksFor = results;
+      _resultLinksCache = [
+        for (final result in results) giphyLibrary.link(result),
+      ];
+    }
+    return _resultLinksCache;
+  }
+
+  static String _linkKey(MediaLink link) =>
+      '${link.sourceType}:${link.sourceId}';
+
+  void _clearLinkSelection() => setState(() {
+    selectedLinks.clear();
+    linkAnchorKey = null;
+  });
+
+  /// Mirrors [_selectLibraryItem]: Shift selects a range of [order], Ctrl or
+  /// the checkbox toggles, and a plain click selects only [link].
+  void _selectLink(
+    MediaLink link,
+    List<MediaLink> order, {
+    bool checkbox = false,
+  }) {
+    final keyboard = HardwareKeyboard.instance;
+    final shift = Platform.isWindows && keyboard.isShiftPressed;
+    final control =
+        Platform.isWindows &&
+        (keyboard.isControlPressed || keyboard.isMetaPressed);
+    final key = _linkKey(link);
+    setState(() {
+      if (shift) {
+        final from = order.indexWhere(
+          (entry) => _linkKey(entry) == linkAnchorKey,
+        );
+        final to = order.indexWhere((entry) => _linkKey(entry) == key);
+        if (from >= 0 && to >= 0) {
+          if (!control) selectedLinks.clear();
+          final low = from < to ? from : to;
+          final high = from > to ? from : to;
+          for (var i = low; i <= high; i++) {
+            selectedLinks[_linkKey(order[i])] = order[i];
+          }
+          return;
+        }
+      }
+      if (control || checkbox) {
+        if (selectedLinks.remove(key) == null) selectedLinks[key] = link;
+      } else {
+        selectedLinks
+          ..clear()
+          ..[key] = link;
+      }
+      linkAnchorKey = key;
+    });
+  }
+
+  void _tapLink(MediaLink link, List<MediaLink> order, VoidCallback open) {
+    final keyboard = HardwareKeyboard.instance;
+    final modifier =
+        Platform.isWindows &&
+        (keyboard.isShiftPressed ||
+            keyboard.isControlPressed ||
+            keyboard.isMetaPressed);
+    final touch = Theme.of(context).platform == TargetPlatform.android;
+    if (selectedLinks.isNotEmpty || modifier) {
+      _selectLink(link, order, checkbox: touch);
+    } else {
+      open();
+    }
+  }
+
+  /// Lets a KLIPY result or pin be dragged onto a folder, like library items;
+  /// a selected tile carries the whole selection. On Android a long press
+  /// starts selecting instead, and the toolbar or menu saves to a folder.
+  Widget _linkWrap(MediaLink link, List<MediaLink> order, Widget child) {
+    if (Theme.of(context).platform == TargetPlatform.android) {
+      return GestureDetector(
+        onLongPress: () => _selectLink(link, order, checkbox: true),
+        child: child,
+      );
+    }
+    final links = selectedLinks.containsKey(_linkKey(link))
+        ? selectedLinks.values.toList()
+        : [link];
+    return Draggable<_LibraryDrag>(
+      data: _LibraryDrag.links(links),
+      feedback: _dragFeedback(
+        links.length == 1 ? link.name : '${links.length} items',
+        Icons.add_photo_alternate_outlined,
+      ),
+      childWhenDragging: Opacity(opacity: .4, child: child),
+      child: child,
+    );
+  }
+
+  Widget _linkSelectionToolbar({required bool compact}) {
+    final links = selectedLinks.values.toList();
+    final saved = [
+      for (final link in links)
+        ?widget.store.itemBySource(link.sourceType, link.sourceId),
+    ];
+    return Material(
+      elevation: 18,
+      shadowColor: Colors.black,
+      color: MemlibColors.high,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: MemlibColors.border),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(5),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              height: 32,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: MemlibColors.accentSoft,
+                borderRadius: BorderRadius.circular(11),
+              ),
+              child: Text(
+                compact ? '${links.length}' : '${links.length} selected',
+                style: const TextStyle(
+                  color: MemlibColors.accent,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+            const SizedBox(width: 4),
+            _toolbarButton(
+              tooltip: 'Save to folder',
+              icon: Icons.drive_file_move_outline,
+              onPressed: () async {
+                final folder = await _chooseMoveFolder(
+                  title: 'Save selected items',
+                );
+                if (folder == null) return;
+                await _saveLinks(links, folder.isEmpty ? null : folder);
+                _clearLinkSelection();
+              },
+            ),
+            _toolbarButton(
+              tooltip: 'Add to favourites',
+              icon: Icons.star_border_rounded,
+              onPressed: () async {
+                try {
+                  await widget.store.addLinkedItems([
+                    for (final link in links) link.asFavorite(),
+                  ], folderId: selectedFolder);
+                  _showError('Added to favourites');
+                  _clearLinkSelection();
+                } catch (e) {
+                  _showError('Could not save: $e');
+                }
+              },
+            ),
+            if (saved.isNotEmpty)
+              _toolbarButton(
+                tooltip: 'Remove from library',
+                icon: Icons.delete_outline,
+                color: MemlibColors.danger,
+                onPressed: () async {
+                  await widget.store.deleteItems(saved);
+                  _showError(
+                    'Removed ${saved.length} ${saved.length == 1 ? 'item' : 'items'} from your library',
+                  );
+                  _clearLinkSelection();
+                },
+              ),
+            _toolbarDivider(),
+            _toolbarButton(
+              tooltip: 'Clear selection',
+              icon: Icons.close,
+              color: MemlibColors.textMuted,
+              onPressed: _clearLinkSelection,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Floats the provider selection toolbar over the KLIPY or Pinterest grid.
+  Widget _withLinkToolbar(Widget child) => Stack(
+    children: [
+      Positioned.fill(child: child),
+      if (selectedLinks.isNotEmpty)
+        Positioned(
+          left: 12,
+          right: 12,
+          bottom: 18,
+          child: LayoutBuilder(
+            builder: (context, constraints) => Center(
+              child: _linkSelectionToolbar(compact: constraints.maxWidth < 360),
+            ),
+          ),
+        ),
+    ],
+  );
+
+  Future<void> _linkAction(MediaLink link, String action) async {
+    final saved = widget.store.itemBySource(link.sourceType, link.sourceId);
+    if (action.startsWith('save:')) {
+      final folderId = action.substring(5);
+      await _saveLinks([link], folderId.isEmpty ? null : folderId);
+    }
+    if (action == 'source' && link.sourcePage != null) {
+      await Clipboard.setData(ClipboardData(text: link.sourcePage!));
+      _showError('Source link copied');
+    }
+    if (action == 'share') await _shareUrl(link.mediaUrl);
+    if (action == 'remove' && saved != null) {
+      await widget.store.deleteItem(saved);
+      _showError('Removed from your library');
+    }
+  }
+
+  /// The library's item actions for a KLIPY result or pin: save or move it to
+  /// any folder, share it, or remove it again.
+  Widget _linkMenu(MediaLink link) {
+    final saved = widget.store.itemBySource(link.sourceType, link.sourceId);
+    final verb = saved == null ? 'Save to' : 'Move to';
+    return PopupMenuButton<String>(
+      tooltip: 'More options',
+      position: PopupMenuPosition.under,
+      onSelected: (action) => unawaited(_linkAction(link, action)),
+      itemBuilder: (_) => <PopupMenuEntry<String>>[
+        PopupMenuItem(
+          value: 'save:',
+          enabled: saved == null || saved.folderId != null,
+          child: _menuRow(Icons.drive_file_move_outline, '$verb All items'),
+        ),
+        ...widget.store.folders.map(
+          (folder) => PopupMenuItem(
+            value: 'save:${folder.id}',
+            enabled: saved?.folderId != folder.id,
+            child: _menuRow(Icons.folder_outlined, '$verb ${folder.name}'),
+          ),
+        ),
+        const PopupMenuDivider(),
+        if (Platform.isAndroid)
+          PopupMenuItem(
+            value: 'share',
+            child: _menuRow(Icons.share_outlined, 'Share to another app'),
+          ),
+        if (link.sourcePage != null)
+          PopupMenuItem(
+            value: 'source',
+            child: _menuRow(Icons.link, 'Copy source link'),
+          ),
+        if (saved != null)
+          PopupMenuItem(
+            value: 'remove',
+            child: _menuRow(
+              Icons.delete_outline,
+              'Remove from library',
+              color: MemlibColors.danger,
+            ),
+          ),
+      ],
+      child: const IgnorePointer(
+        child: TileAction(
+          tooltip: 'More options',
+          icon: Icons.more_horiz,
+          onPressed: null,
+        ),
+      ),
     );
   }
 
@@ -1728,55 +2191,56 @@ class _LibraryScreenState extends State<LibraryScreen>
     }
   }
 
-  Future<String?> _chooseMoveFolder() => showDialog<String>(
-    context: context,
-    builder: (context) {
-      final tiles = <Widget>[];
-      final visited = <String>{};
-      void addChildren(String? parentId, int depth) {
-        for (final folder in foldersIn(parentId)) {
-          if (!visited.add(folder.id)) continue;
-          tiles.add(
-            ListTile(
-              contentPadding: EdgeInsets.only(
-                left: 16.0 + depth * 18,
-                right: 16,
-              ),
-              leading: const Icon(Icons.folder_outlined),
-              title: Text(folder.name),
-              onTap: () => Navigator.pop(context, folder.id),
-            ),
-          );
-          addChildren(folder.id, depth + 1);
-        }
-      }
+  Future<String?> _chooseMoveFolder({String title = 'Move selected items'}) =>
+      showDialog<String>(
+        context: context,
+        builder: (context) {
+          final tiles = <Widget>[];
+          final visited = <String>{};
+          void addChildren(String? parentId, int depth) {
+            for (final folder in foldersIn(parentId)) {
+              if (!visited.add(folder.id)) continue;
+              tiles.add(
+                ListTile(
+                  contentPadding: EdgeInsets.only(
+                    left: 16.0 + depth * 18,
+                    right: 16,
+                  ),
+                  leading: const Icon(Icons.folder_outlined),
+                  title: Text(folder.name),
+                  onTap: () => Navigator.pop(context, folder.id),
+                ),
+              );
+              addChildren(folder.id, depth + 1);
+            }
+          }
 
-      addChildren(null, 0);
-      return AlertDialog(
-        title: const Text('Move selected items'),
-        content: SizedBox(
-          width: 360,
-          height: 360,
-          child: ListView(
-            children: [
-              ListTile(
-                leading: const Icon(Icons.home_outlined),
-                title: const Text('Library root'),
-                onTap: () => Navigator.pop(context, ''),
+          addChildren(null, 0);
+          return AlertDialog(
+            title: Text(title),
+            content: SizedBox(
+              width: 360,
+              height: 360,
+              child: ListView(
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.home_outlined),
+                    title: const Text('Library root'),
+                    onTap: () => Navigator.pop(context, ''),
+                  ),
+                  ...tiles,
+                ],
               ),
-              ...tiles,
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
             ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-        ],
+          );
+        },
       );
-    },
-  );
 
   Widget _toolbarButton({
     required String tooltip,
@@ -1924,15 +2388,63 @@ class _LibraryScreenState extends State<LibraryScreen>
     foregroundColor: MemlibColors.onAccent,
   );
 
-  void _switchMainTab(int tab) => _switchTab(tab == 1);
+  int get _mainTab => pinterestTab
+      ? 2
+      : giphyTab
+      ? 1
+      : 0;
+
+  void _switchMainTab(int tab) {
+    if (tab == 2) {
+      setState(() {
+        pinterestTab = true;
+        giphyTab = false;
+        selectedLinks.clear();
+        linkAnchorKey = null;
+        selectedItemIds.clear();
+        selectionAnchorId = null;
+      });
+      return;
+    }
+    pinterestTab = false;
+    _switchTab(tab == 1);
+  }
 
   Widget _mainNavigation() => SegmentedTabs(
     tabs: const [
       SegmentTab('Library', Icons.grid_view_rounded),
       SegmentTab('KLIPY', Icons.auto_awesome_outlined),
+      if (PinterestService.enabled)
+        SegmentTab('Pinterest', Icons.push_pin_outlined),
     ],
-    selected: giphyTab ? 1 : 0,
+    selected: _mainTab,
     onChanged: _switchMainTab,
+  );
+
+  Future<void> _usePin(PinterestPin pin) async {
+    if (busy) return;
+    setState(() => busy = true);
+    final client = http.Client();
+    try {
+      final media = await fetchLinkedMedia(client, pin.mediaUrl);
+      await actions.copyBytes(media.bytes, media.extension);
+      await _afterCopy();
+    } catch (e) {
+      _showError('Could not copy pin: $e');
+    } finally {
+      client.close();
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Widget _pinterestView() => PinterestView(
+    service: pinterest,
+    store: widget.store,
+    folderId: selectedFolder,
+    onUse: _usePin,
+    onMessage: _showError,
+    host: linkHost,
+    boardHost: linkHost,
   );
 
   Future<void> _importLinks(List<String> links) async {
@@ -2405,8 +2917,10 @@ class _LibraryScreenState extends State<LibraryScreen>
                 child: Column(
                   children: [
                     if (widget.cloud?.syncError != null) _syncBanner(),
-                    if (giphyTab)
-                      Expanded(child: _giphyView())
+                    if (pinterestTab)
+                      Expanded(child: _withLinkToolbar(_pinterestView()))
+                    else if (giphyTab)
+                      Expanded(child: _withLinkToolbar(_giphyView()))
                     else
                       Expanded(child: _libraryView(wide)),
                   ],
@@ -2475,7 +2989,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                     ),
                   ),
                   child: NavigationBar(
-                    selectedIndex: giphyTab ? 1 : 0,
+                    selectedIndex: _mainTab,
                     onDestinationSelected: _switchMainTab,
                     labelBehavior:
                         NavigationDestinationLabelBehavior.alwaysShow,
@@ -2490,6 +3004,12 @@ class _LibraryScreenState extends State<LibraryScreen>
                         selectedIcon: Icon(Icons.auto_awesome),
                         label: 'KLIPY',
                       ),
+                      if (PinterestService.enabled)
+                        NavigationDestination(
+                          icon: Icon(Icons.push_pin_outlined),
+                          selectedIcon: Icon(Icons.push_pin),
+                          label: 'Pinterest',
+                        ),
                     ],
                   ),
                 ),
@@ -2754,7 +3274,9 @@ class _LibraryScreenState extends State<LibraryScreen>
         ),
       );
       if (confirmed != true || !mounted) return;
-      if (selectedFolder == folder.id) _openFolder(folder.parentId);
+      if (selectedFolder == folder.id) {
+        _openFolder(folder.parentId, showLibrary: false);
+      }
       await widget.store.deleteFolder(folder);
       if (mounted) setState(() => expandedFolders.remove(folder.id));
     }
@@ -2934,6 +3456,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                 trailing: _countLabel(favourites.length),
                 selected: favoritesOnly,
                 onTap: () => setState(() {
+                  _showLibraryTab();
                   selectedFolder = null;
                   _resetFolderHistory();
                   favoritesOnly = true;
@@ -3237,6 +3760,7 @@ class _LibraryScreenState extends State<LibraryScreen>
           icon: Icons.star_rounded,
           selected: favoritesOnly,
           onTap: () => setState(() {
+            _showLibraryTab();
             selectedFolder = null;
             _resetFolderHistory();
             favoritesOnly = true;
@@ -3545,6 +4069,35 @@ class _LibraryScreenState extends State<LibraryScreen>
     );
   }
 
+  /// The item's media: a local file, or the provider's URL for linked items.
+  /// Grids use the smaller preview; [full] loads the original.
+  Widget _itemImage(
+    LibraryItem item, {
+    bool full = false,
+    int? cacheWidth,
+    required ImageErrorWidgetBuilder errorBuilder,
+  }) {
+    if (!item.isLinked) {
+      return Image.file(
+        widget.store.fileFor(item),
+        fit: BoxFit.contain,
+        cacheWidth: cacheWidth,
+        errorBuilder: errorBuilder,
+      );
+    }
+    return Image.network(
+      full ? item.mediaUrl! : item.previewUrl ?? item.mediaUrl!,
+      fit: BoxFit.contain,
+      cacheWidth: cacheWidth,
+      errorBuilder: errorBuilder,
+    );
+  }
+
+  static bool _hasSourceBadge(String sourceType) =>
+      sourceType == 'giphy' ||
+      sourceType == 'klipy' ||
+      sourceType == 'pinterest';
+
   Widget _giphyBadge(String sourceType) => IgnorePointer(
     child: Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -3553,7 +4106,11 @@ class _LibraryScreenState extends State<LibraryScreen>
         borderRadius: BorderRadius.circular(6),
       ),
       child: Text(
-        sourceType == 'giphy' ? 'GIPHY' : 'KLIPY',
+        switch (sourceType) {
+          'giphy' => 'GIPHY',
+          'pinterest' => 'PINTEREST',
+          _ => 'KLIPY',
+        },
         style: const TextStyle(
           fontSize: 9,
           fontWeight: FontWeight.w800,
@@ -3610,9 +4167,8 @@ class _LibraryScreenState extends State<LibraryScreen>
         ? const SizedBox.expand()
         : Padding(
             padding: const EdgeInsets.all(4),
-            child: Image.file(
-              widget.store.fileFor(item),
-              fit: BoxFit.contain,
+            child: _itemImage(
+              item,
               cacheWidth: 180,
               errorBuilder: (_, _, _) => const SizedBox.expand(),
             ),
@@ -3817,9 +4373,8 @@ class _LibraryScreenState extends State<LibraryScreen>
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(10, 10, 10, 28),
-              child: Image.file(
-                widget.store.fileFor(item),
-                fit: BoxFit.contain,
+              child: _itemImage(
+                item,
                 errorBuilder: (_, _, _) => const Icon(
                   Icons.broken_image_outlined,
                   color: MemlibColors.textFaint,
@@ -3841,7 +4396,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                 ),
               ),
             ),
-            if (item.sourceType == 'giphy' || item.sourceType == 'klipy')
+            if (_hasSourceBadge(item.sourceType))
               Positioned(left: 6, top: 6, child: _giphyBadge(item.sourceType)),
             Positioned(
               top: 5,
@@ -3918,7 +4473,11 @@ class _LibraryScreenState extends State<LibraryScreen>
       _showError('Source link copied');
     }
     if (action == 'share' && Platform.isAndroid) {
-      await AndroidBridge.shareFile(widget.store.fileFor(item));
+      if (item.isLinked) {
+        await _shareUrl(item.mediaUrl!);
+      } else {
+        await AndroidBridge.shareFile(widget.store.fileFor(item));
+      }
     }
     if (action.startsWith('move:')) {
       await widget.store.updateItem(
@@ -4012,9 +4571,8 @@ class _LibraryScreenState extends State<LibraryScreen>
                 children: [
                   Padding(
                     padding: const EdgeInsets.all(12),
-                    child: Image.file(
-                      widget.store.fileFor(item),
-                      fit: BoxFit.contain,
+                    child: _itemImage(
+                      item,
                       errorBuilder: (_, _, _) => const Icon(
                         Icons.broken_image_outlined,
                         color: MemlibColors.textFaint,
@@ -4027,7 +4585,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                         child: ColoredBox(color: Color(0x1ABDA7FF)),
                       ),
                     ),
-                  if (item.sourceType == 'giphy' || item.sourceType == 'klipy')
+                  if (_hasSourceBadge(item.sourceType))
                     Positioned(
                       left: 8,
                       bottom: 8,
@@ -4178,14 +4736,25 @@ class _LibraryScreenState extends State<LibraryScreen>
   }) {
     final saved = giphyLibrary.savedItem(item);
     final saving = savingGiphy.contains(item.id);
-    return Hoverable(
+    // Saving, selection, dragging and the item menu belong to the library
+    // window; the quick picker only sends.
+    final linkActions = !compact && GiphyService.librarySavesEnabled;
+    final link = giphyLibrary.link(item);
+    final order = linkActions ? _resultLinks : const <MediaLink>[];
+    final checked = linkActions && linkHost.isSelected(link);
+    void open() => _useGiphy(item);
+    final tile = Hoverable(
       key: compact ? ValueKey('giphy-${item.id}') : null,
       builder: (context, hovered) {
         final controls = hovered || touch || selected;
         return _tileSurface(
           hovered: hovered,
-          highlighted: selected,
-          onTap: busy ? null : () => _useGiphy(item),
+          highlighted: selected || checked,
+          onTap: busy
+              ? null
+              : linkActions
+              ? () => _tapLink(link, order, open)
+              : open,
           children: [
             Image.network(
               item.previewUrl,
@@ -4204,13 +4773,19 @@ class _LibraryScreenState extends State<LibraryScreen>
                 ),
               ),
             ),
+            if (checked)
+              const Positioned.fill(
+                child: IgnorePointer(
+                  child: ColoredBox(color: Color(0x1ABDA7FF)),
+                ),
+              ),
             Positioned(
               left: 0,
               right: 0,
               bottom: 0,
               child: IgnorePointer(
                 child: Container(
-                  padding: const EdgeInsets.fromLTRB(8, 16, 8, 6),
+                  padding: EdgeInsets.fromLTRB(8, 16, linkActions ? 36 : 8, 6),
                   decoration: const BoxDecoration(
                     gradient: LinearGradient(
                       begin: Alignment.topCenter,
@@ -4231,9 +4806,21 @@ class _LibraryScreenState extends State<LibraryScreen>
               ),
             ),
             if (GiphyService.librarySavesEnabled) ...[
+              if (linkActions)
+                Positioned(
+                  top: 5,
+                  left: 5,
+                  child: LinkCheckbox(
+                    host: linkHost,
+                    link: link,
+                    order: order,
+                    visible: controls,
+                  ),
+                ),
               Positioned(
                 top: 6,
-                left: 6,
+                left: linkActions ? null : 6,
+                right: linkActions ? 40 : null,
                 child: IgnorePointer(
                   ignoring: !controls && saved?.favorite != true,
                   child: AnimatedOpacity(
@@ -4282,10 +4869,24 @@ class _LibraryScreenState extends State<LibraryScreen>
                 ),
               ),
             ],
+            if (linkActions)
+              Positioned(
+                right: 4,
+                bottom: 4,
+                child: IgnorePointer(
+                  ignoring: !controls,
+                  child: AnimatedOpacity(
+                    opacity: controls ? 1 : 0,
+                    duration: const Duration(milliseconds: 120),
+                    child: _linkMenu(link),
+                  ),
+                ),
+              ),
           ],
         );
       },
     );
+    return linkActions ? _linkWrap(link, order, tile) : tile;
   }
 
   Widget _giphyView({bool compact = false}) {
@@ -4564,4 +5165,39 @@ class _SetupStep extends StatelessWidget {
       ),
     ],
   );
+}
+
+/// Connects provider tiles (KLIPY, Pinterest) to the library window.
+class _LinkHost implements LinkTileHost, PinterestBoardHost {
+  _LinkHost(this.state);
+  final _LibraryScreenState state;
+
+  @override
+  bool isSelected(MediaLink link) =>
+      state.selectedLinks.containsKey(_LibraryScreenState._linkKey(link));
+
+  @override
+  bool get selecting => state.selectedLinks.isNotEmpty;
+
+  @override
+  void select(MediaLink link, List<MediaLink> order, {bool checkbox = false}) =>
+      state._selectLink(link, order, checkbox: checkbox);
+
+  @override
+  void tap(MediaLink link, List<MediaLink> order, VoidCallback open) =>
+      state._tapLink(link, order, open);
+
+  @override
+  Widget menu(MediaLink link) => state._linkMenu(link);
+
+  @override
+  Widget wrap(MediaLink link, List<MediaLink> order, Widget tile) =>
+      state._linkWrap(link, order, tile);
+
+  @override
+  Widget boardMenu(PinterestBoard board) => state._boardMenu(board);
+
+  @override
+  Widget wrapBoard(PinterestBoard board, Widget tile) =>
+      state._boardWrap(board, tile);
 }
