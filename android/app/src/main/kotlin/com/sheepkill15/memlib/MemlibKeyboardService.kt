@@ -25,6 +25,7 @@ import android.view.WindowInsets
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputContentInfo
+import android.view.inputmethod.InputMethodManager
 import android.content.ClipDescription
 import android.widget.HorizontalScrollView
 import android.widget.FrameLayout
@@ -211,6 +212,10 @@ class MemlibKeyboardService : InputMethodService() {
         })
         top.addView(tabs, LinearLayout.LayoutParams(-2, dp(34)))
         top.addView(View(this), LinearLayout.LayoutParams(0, dp(40), 1f))
+        // Some devices and launchers show no system keyboard switcher, so offer our own way out.
+        if (hasOtherInputMethods()) top.addView(ghostKey("🌐", description = "Switch keyboard") { switchKeyboard() }.apply {
+            setOnLongClickListener { inputMethodManager().showInputMethodPicker(); true }
+        })
         top.addView(ghostKey("↗", description = "Open Memlib library") { openLibrary() })
         top.addView(ghostKey("×", description = "Hide keyboard") { requestHideSelf(0) })
         rootView.addView(top, LinearLayout.LayoutParams(-1, dp(42)))
@@ -857,6 +862,23 @@ class MemlibKeyboardService : InputMethodService() {
 
     private fun openLibrary() {
         packageManager.getLaunchIntentForPackage(packageName)?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)?.let(::startActivity)
+    }
+
+    private fun inputMethodManager() = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+
+    private fun hasOtherInputMethods() = inputMethodManager().enabledInputMethodList.any { it.packageName != packageName }
+
+    /** Returns to the previous keyboard, then the next one, and falls back to the system picker. */
+    private fun switchKeyboard() {
+        val switched = if (Build.VERSION.SDK_INT >= 28) {
+            switchToPreviousInputMethod() || switchToNextInputMethod(false)
+        } else {
+            val token = window?.window?.attributes?.token
+            @Suppress("DEPRECATION")
+            token != null && (inputMethodManager().switchToLastInputMethod(token) ||
+                inputMethodManager().switchToNextInputMethod(token, false))
+        }
+        if (!switched) inputMethodManager().showInputMethodPicker()
     }
 
     private fun renderSearchKeys() {
